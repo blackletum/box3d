@@ -19,13 +19,14 @@ Box3D is a 3D physics engine for games.
 - Collision filtering
 - Ray casts, shape casts, and overlap queries
 - Sensor system
+- Character mover
 
 ### Physics
 
 - Robust _Soft Step_ rigid body solver
 - Continuous physics for fast translations and rotations
 - Island based sleep
-- Revolute, prismatic, distance, mouse joint, weld, and wheel joints
+- Revolute, prismatic, distance, motor, weld, and wheel joints
 - Joint limits, motors, springs, and friction
 - Joint and contact forces
 - Body movement events and sleep notification
@@ -36,6 +37,8 @@ Box3D is a 3D physics engine for games.
 - Written in portable C17
 - Extensive multithreading and SIMD
 - Optimized for large piles of bodies
+- Cross platform determinism
+- Recording and replay
 
 ### Samples
 
