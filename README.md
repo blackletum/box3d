@@ -39,9 +39,9 @@ Box3D is a 3D physics engine for games.
 
 ### Samples
 
-- Uses sokol to run with D3D11 on Window, Metal on macOS, and OpenGL 4.3 on Linux
-- Graphical user interface with imgui
-- Many samples to demonstrate features and performance
+- Uses sokol to run with D3D11 on Windows, Metal on macOS, and OpenGL 4.5 on Linux.
+- Graphical user interface with imgui.
+- Many samples to demonstrate features and performance.
 
 ## Building all platforms
 
