@@ -385,17 +385,18 @@ static int OverlapHullProxyEquivalence( void )
 
 	// Overlapping target: a 10 wide query box centered on the body.
 	{
-		b3Pos target = { 10.0f, 0.0f, 0.0f };
+		b3Vec3 offset = { 10.0f, 0.0f, 0.0f };
 
-		b3BoxHull baked = b3MakeTransformedBoxHull( 5.0f, 5.0f, 5.0f, (b3Transform){ target, b3Quat_identity } );
+		b3BoxHull baked = b3MakeTransformedBoxHull( 5.0f, 5.0f, 5.0f, (b3Transform){ offset, b3Quat_identity } );
 		b3ShapeProxy bakedProxy = { baked.boxPoints, baked.base.vertexCount, 0.0f };
 		int bakedHits = 0;
 		b3World_OverlapShape( worldId, b3Pos_zero, &bakedProxy, filter, CountOverlapCallback, &bakedHits );
 
+		b3Pos origin = b3OffsetPos( b3Pos_zero, offset );
 		b3BoxHull local = b3MakeBoxHull( 5.0f, 5.0f, 5.0f );
 		b3ShapeProxy localProxy = { local.boxPoints, local.base.vertexCount, 0.0f };
 		int localHits = 0;
-		b3World_OverlapShape( worldId, target, &localProxy, filter, CountOverlapCallback, &localHits );
+		b3World_OverlapShape( worldId, origin, &localProxy, filter, CountOverlapCallback, &localHits );
 
 		ENSURE( bakedHits == 1 );
 		ENSURE( localHits == bakedHits );
@@ -403,17 +404,18 @@ static int OverlapHullProxyEquivalence( void )
 
 	// Clearing target: same box far from the body, both formulations agree on the miss.
 	{
-		b3Pos target = { 100.0f, 0.0f, 0.0f };
+		b3Vec3 offset = { 100.0f, 0.0f, 0.0f };
 
-		b3BoxHull baked = b3MakeTransformedBoxHull( 5.0f, 5.0f, 5.0f, (b3Transform){ target, b3Quat_identity } );
+		b3BoxHull baked = b3MakeTransformedBoxHull( 5.0f, 5.0f, 5.0f, (b3Transform){ offset, b3Quat_identity } );
 		b3ShapeProxy bakedProxy = { baked.boxPoints, baked.base.vertexCount, 0.0f };
 		int bakedHits = 0;
 		b3World_OverlapShape( worldId, b3Pos_zero, &bakedProxy, filter, CountOverlapCallback, &bakedHits );
 
+		b3Pos origin = b3OffsetPos( b3Pos_zero, offset );
 		b3BoxHull local = b3MakeBoxHull( 5.0f, 5.0f, 5.0f );
 		b3ShapeProxy localProxy = { local.boxPoints, local.base.vertexCount, 0.0f };
 		int localHits = 0;
-		b3World_OverlapShape( worldId, target, &localProxy, filter, CountOverlapCallback, &localHits );
+		b3World_OverlapShape( worldId, origin, &localProxy, filter, CountOverlapCallback, &localHits );
 
 		ENSURE( bakedHits == 0 );
 		ENSURE( localHits == bakedHits );
