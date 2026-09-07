@@ -76,7 +76,9 @@ B3_API float b3GetStallThreshold( void );
 #define B3_MAX_ROTATION ( 0.25f * B3_PI )
 
 /// @warning modifying this can have a significant impact on performance and stability
+#ifndef B3_SPECULATIVE_DISTANCE
 #define B3_SPECULATIVE_DISTANCE ( 4.0f * B3_LINEAR_SLOP )
+#endif
 
 /// The rest offset is used for mesh contact to reduce ghost collisions and assist with CCD.
 /// The rest offset adjusts the contact point separation value, making the solver push the shapes
