@@ -369,8 +369,9 @@ static void b3ReduceManifoldPoints( b3LocalManifold* manifold, int capacity, b3L
 	}
 }
 
-#elif 1
+#elif 0
 
+// todo hook up the 2D hull
 // Reduce the manifold points to a maximum of B3_MAX_MANIFOLD_POINTS points.
 static void b3ReduceManifoldPoints( b3LocalManifold* manifold, int capacity, b3LocalManifoldPoint* points, int count )
 {

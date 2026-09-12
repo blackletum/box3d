@@ -108,7 +108,8 @@ B3_API float b3GetStallThreshold( void );
 /// The maximum number of contact points between two touching shapes.
 /// The default is 4 and this case will use an approximate convex hull to
 /// reduce the point count. Any other value will fill the manifold with points
-/// in an arbitray order until it is full.
+/// in an arbitray order until it is full. Useful for testing, but I don't recommend
+/// shipping with it adjusted.
 #ifndef B3_MAX_MANIFOLD_POINTS
 #define B3_MAX_MANIFOLD_POINTS 4
 #endif
