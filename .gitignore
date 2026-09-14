@@ -11,4 +11,4 @@ CMakeUserPresets.json
 .tmp/
 .fetchcontent-cache/
 *.b3rec
-
+*.zip
