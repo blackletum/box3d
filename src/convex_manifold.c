@@ -203,6 +203,8 @@ static b3SeparatingAxis b3QueryEdgeDirectionHullAndCapsule( const b3HullData* hu
 	};
 }
 
+_Static_assert( B3_MAX_MANIFOLD_POINTS >= 4, "must be 4 or more" );
+
 #if B3_MAX_MANIFOLD_POINTS == 4
 
 // Reduce the manifold points to a maximum of 4 points.

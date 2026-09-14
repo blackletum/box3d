@@ -2987,7 +2987,7 @@ int b3SimplifyHull2D( b3Point2D* hull, int count1, int target )
 			}
 		}
 
-		if ( minArea > areaTol && count2 <= target )
+		if ( count2 <= 3 || ( minArea > areaTol && count2 <= target ) )
 		{
 			break;
 		}

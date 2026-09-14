@@ -834,6 +834,11 @@ public:
 			b3MotorJoint_SetMaxVelocityTorque( m_motorId, scale * m_torque );
 			b3MotorJoint_SetAngularVelocity( m_motorId, speed * axis );
 		}
+		else
+		{
+			b3MotorJoint_SetAngularVelocity( m_motorId, b3Vec3_zero );
+			
+		}
 
 		Sample::Step();
 

@@ -106,7 +106,7 @@ B3_API float b3GetStallThreshold( void );
 #define B3_TIME_TO_SLEEP 0.5f
 
 /// The maximum number of contact points between two touching shapes.
-/// The default is 4 and this case will use an approximate convex hull to
+/// The default and minimum is 4 and this case will use an approximate convex hull to
 /// reduce the point count. Any other value will fill the manifold with points
 /// in an arbitray order until it is full. Useful for testing, but I don't recommend
 /// shipping with it adjusted.

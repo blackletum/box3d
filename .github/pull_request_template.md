@@ -1,2 +1,2 @@
--[] run unit tests
--[] run all samples
+- [ ] run unit tests
+- [ ] run all samples
