@@ -213,8 +213,8 @@ void CreateManyPyramids( b3WorldId worldId )
 {
 	int baseCount = 10;
 	float extent = 0.5f;
-	int rowCount = BENCHMARK_DEBUG ? 3 : 30;
-	int columnCount = BENCHMARK_DEBUG ? 3 : 30;
+	int rowCount = BENCHMARK_DEBUG ? 3 : 14;
+	int columnCount = BENCHMARK_DEBUG ? 3 : 14;
 	float groundExtent = extent * columnCount * ( baseCount + 1.0f );
 
 	{
