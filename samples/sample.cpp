@@ -621,7 +621,7 @@ void Sample::DrawMetrics()
 		int count = m_profileWriteIndex - m_profileReadIndex;
 
 		// Unroll ring buffer into per-field histories.
-		constexpr int kRowCount = 22;
+		constexpr int kRowCount = 21;
 		float histories[kRowCount][m_profileCapacity];
 		float totals[kRowCount] = {};
 		for ( int i = 0; i < count; ++i )
@@ -640,16 +640,15 @@ void Sample::DrawMetrics()
 			histories[9][i] = p.solveImpulses;
 			histories[10][i] = p.integratePositions;
 			histories[11][i] = p.relaxImpulses;
-			histories[12][i] = p.applyRestitution;
-			histories[13][i] = p.storeImpulses;
-			histories[14][i] = p.splitIslands;
-			histories[15][i] = p.transforms;
-			histories[16][i] = p.jointEvents;
-			histories[17][i] = p.hitEvents;
-			histories[18][i] = p.refit;
-			histories[19][i] = p.sleepIslands;
-			histories[20][i] = p.bullets;
-			histories[21][i] = p.sensors;
+			histories[12][i] = p.storeImpulses;
+			histories[13][i] = p.splitIslands;
+			histories[14][i] = p.transforms;
+			histories[15][i] = p.jointEvents;
+			histories[16][i] = p.hitEvents;
+			histories[17][i] = p.refit;
+			histories[18][i] = p.sleepIslands;
+			histories[19][i] = p.bullets;
+			histories[20][i] = p.sensors;
 
 			totals[0] += p.step;
 			totals[1] += p.pairs;
@@ -663,16 +662,15 @@ void Sample::DrawMetrics()
 			totals[9] += p.solveImpulses;
 			totals[10] += p.integratePositions;
 			totals[11] += p.relaxImpulses;
-			totals[12] += p.applyRestitution;
-			totals[13] += p.storeImpulses;
-			totals[14] += p.splitIslands;
-			totals[15] += p.transforms;
-			totals[16] += p.jointEvents;
-			totals[17] += p.hitEvents;
-			totals[18] += p.refit;
-			totals[19] += p.sleepIslands;
-			totals[20] += p.bullets;
-			totals[21] += p.sensors;
+			totals[12] += p.storeImpulses;
+			totals[13] += p.splitIslands;
+			totals[14] += p.transforms;
+			totals[15] += p.jointEvents;
+			totals[16] += p.hitEvents;
+			totals[17] += p.refit;
+			totals[18] += p.sleepIslands;
+			totals[19] += p.bullets;
+			totals[20] += p.sensors;
 		}
 
 		// Smoothed over the last few frames so bars don't jitter visibly.
@@ -728,13 +726,13 @@ void Sample::DrawMetrics()
 		const ImU32 colorDefault = IM_COL32( 220, 220, 220, 255 );
 
 		const RowDef rows[kRowCount] = {
-			{ "step", 0, colorStep },			{ "pairs", 0, colorPairs },			 { "collide", 0, colorCollide },
-			{ "solve", 0, colorSolve },			{ "setup", 1, colorDefault },		 { "constraints", 1, colorDefault },
-			{ "prepare", 2, colorDefault },		{ "velocities", 2, colorDefault },	 { "warm start", 2, colorDefault },
-			{ "bias", 2, colorDefault },		{ "positions", 2, colorDefault },	 { "relax", 2, colorDefault },
-			{ "restitution", 2, colorDefault }, { "store", 2, colorDefault },		 { "split islands", 2, colorDefault },
-			{ "transforms", 1, colorDefault },	{ "joint events", 1, colorDefault }, { "hit events", 1, colorDefault },
-			{ "refit BVH", 1, colorDefault },	{ "sleep", 1, colorDefault },		 { "bullets", 1, colorDefault },
+			{ "step", 0, colorStep },		   { "pairs", 0, colorPairs },		  { "collide", 0, colorCollide },
+			{ "solve", 0, colorSolve },		   { "setup", 1, colorDefault },	  { "constraints", 1, colorDefault },
+			{ "prepare", 2, colorDefault },	   { "velocities", 2, colorDefault },	  { "warm start", 2, colorDefault },
+			{ "bias", 2, colorDefault },	   { "positions", 2, colorDefault },  { "relax", 2, colorDefault },
+			{ "store", 2, colorDefault },	   { "split islands", 2, colorDefault },
+			{ "transforms", 1, colorDefault }, { "joint events", 1, colorDefault }, { "hit events", 1, colorDefault },
+			{ "refit BVH", 1, colorDefault },  { "sleep", 1, colorDefault },	  { "bullets", 1, colorDefault },
 			{ "sensors", 0, colorSensors },
 		};
 

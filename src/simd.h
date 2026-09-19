@@ -476,6 +476,20 @@ static inline b3FloatW b3OrW( b3FloatW a, b3FloatW b )
 	return vreinterpretq_f32_u32( vorrq_u32( vreinterpretq_u32_f32( a ), vreinterpretq_u32_f32( b ) ) );
 }
 
+// a & ~b
+static inline b3FloatW b3AndNotW( b3FloatW a, b3FloatW b )
+{
+	return vreinterpretq_f32_u32( vbicq_u32( vreinterpretq_u32_f32( a ), vreinterpretq_u32_f32( b ) ) );
+}
+
+static inline b3FloatW b3SoftMaskW( const int* indexA, const int* indexB )
+{
+	int32x4_t zero = vdupq_n_s32( 0 );
+	uint32x4_t a = vceqq_s32( vld1q_s32( (const int32_t*)indexA ), zero );
+	uint32x4_t b = vceqq_s32( vld1q_s32( (const int32_t*)indexB ), zero );
+	return vreinterpretq_f32_u32( vorrq_u32( a, b ) );
+}
+
 static inline b3FloatW b3GreaterThanW( b3FloatW a, b3FloatW b )
 {
 	return vreinterpretq_f32_u32( vcgtq_f32( a, b ) );
@@ -648,6 +662,22 @@ static inline b3FloatW b3AndW( b3FloatW a, b3FloatW b )
 static inline b3FloatW b3OrW( b3FloatW a, b3FloatW b )
 {
 	return _mm_or_ps( a, b );
+}
+
+// a & ~b
+static inline b3FloatW b3AndNotW( b3FloatW a, b3FloatW b )
+{
+	// Arguments are reversed
+	return _mm_andnot_ps( b, a );
+}
+
+// This is used to optimize selection of contact softness.
+static inline b3FloatW b3SoftMaskW( const int* indexA, const int* indexB )
+{
+	__m128i zero = _mm_setzero_si128();
+	__m128i a = _mm_cmpeq_epi32( _mm_loadu_si128( (const __m128i*)indexA ), zero );
+	__m128i b = _mm_cmpeq_epi32( _mm_loadu_si128( (const __m128i*)indexB ), zero );
+	return _mm_castsi128_ps( _mm_or_si128( a, b ) );
 }
 
 static inline b3FloatW b3GreaterThanW( b3FloatW a, b3FloatW b )
@@ -831,6 +861,27 @@ static inline b3FloatW b3OrW( b3FloatW a, b3FloatW b )
 	r.y = a.y != 0.0f || b.y != 0.0f ? 1.0f : 0.0f;
 	r.z = a.z != 0.0f || b.z != 0.0f ? 1.0f : 0.0f;
 	r.w = a.w != 0.0f || b.w != 0.0f ? 1.0f : 0.0f;
+	return r;
+}
+
+// a & ~b
+static inline b3FloatW b3AndNotW( b3FloatW a, b3FloatW b )
+{
+	b3FloatW r;
+	r.x = a.x != 0.0f && b.x == 0.0f ? 1.0f : 0.0f;
+	r.y = a.y != 0.0f && b.y == 0.0f ? 1.0f : 0.0f;
+	r.z = a.z != 0.0f && b.z == 0.0f ? 1.0f : 0.0f;
+	r.w = a.w != 0.0f && b.w == 0.0f ? 1.0f : 0.0f;
+	return r;
+}
+
+static inline b3FloatW b3SoftMaskW( const int* indexA, const int* indexB )
+{
+	b3FloatW r;
+	r.x = indexA[0] == 0 || indexB[0] == 0 ? 1.0f : 0.0f;
+	r.y = indexA[1] == 0 || indexB[1] == 0 ? 1.0f : 0.0f;
+	r.z = indexA[2] == 0 || indexB[2] == 0 ? 1.0f : 0.0f;
+	r.w = indexA[3] == 0 || indexB[3] == 0 ? 1.0f : 0.0f;
 	return r;
 }
 

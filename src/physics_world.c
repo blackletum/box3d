@@ -771,14 +771,19 @@ static void b3CollideTask( int startIndex, int endIndex, int workerIndex, void* 
 			b3SetBit( &taskContext->contactStateBitSet, contactIndex );
 		}
 
-		for ( int manifoldIndex = 0; manifoldIndex < contact->manifoldCount; ++manifoldIndex )
+		if ( touching )
 		{
-			b3Manifold* manifold = contact->manifolds + manifoldIndex;
-			for ( int pointIndex = 0; pointIndex < manifold->pointCount; ++pointIndex )
+			int manifoldCount = contact->manifoldCount;
+			for ( int manifoldIndex = 0; manifoldIndex < manifoldCount; ++manifoldIndex )
 			{
-				// Cache separation
-				b3ManifoldPoint* mp = manifold->points + pointIndex;
-				mp->baseSeparation = mp->separation;
+				b3Manifold* manifold = contact->manifolds + manifoldIndex;
+				int pointCount = manifold->pointCount;
+				for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
+				{
+					// Cache separation
+					b3ManifoldPoint* mp = manifold->points + pointIndex;
+					mp->baseSeparation = mp->separation;
+				}
 			}
 		}
 	}

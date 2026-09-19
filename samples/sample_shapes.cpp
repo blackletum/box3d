@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Erin Catto
 // SPDX-License-Identifier: MIT
 
+#include "gfx/debug_adapter.h"
 #include "gfx/draw.h"
 #include "human.h"
 #include "imgui.h"
@@ -335,6 +336,397 @@ public:
 };
 
 static int sampleRestitution = RegisterSample( "Shapes", "Restitution", Restitution::Create );
+
+static void ComputeEnergy( b3WorldId worldId, const b3BodyId* bodyIds, int count, float* linear, float* angular,
+						   float* potential )
+{
+	b3Vec3 gravity = b3World_GetGravity( worldId );
+
+	float linearSum = 0.0f;
+	float angularSum = 0.0f;
+	float potentialSum = 0.0f;
+
+	for ( int i = 0; i < count; ++i )
+	{
+		b3MassData massData = b3Body_GetMassData( bodyIds[i] );
+		b3Vec3 v = b3Body_GetLinearVelocity( bodyIds[i] );
+
+		// The inertia tensor is in the body frame, so bring the angular velocity back to it
+		b3Vec3 w = b3InvRotateVector( b3Body_GetRotation( bodyIds[i] ), b3Body_GetAngularVelocity( bodyIds[i] ) );
+
+		linearSum += 0.5f * massData.mass * b3Dot( v, v );
+		angularSum += 0.5f * b3Dot( w, b3MulMV( massData.inertia, w ) );
+		potentialSum -= massData.mass * b3Dot( gravity, b3ToVec3( b3Body_GetWorldCenter( bodyIds[i] ) ) );
+	}
+
+	*linear = linearSum;
+	*angular = angularSum;
+	*potential = potentialSum;
+}
+
+// Similar to the MeasureSupportedBounce unit test
+class SphereStackRestitution : public Sample
+{
+public:
+	static constexpr float m_impactSpeed = 5.0f;
+	static constexpr int m_maxStackCount = 3;
+
+	explicit SphereStackRestitution( SampleContext* context )
+		: Sample( context )
+	{
+		if ( context->restart == false )
+		{
+			m_camera->SetView( 20.0f, 10.0f, 12.0f, { 0.0f, 2.5f, 0.0f } );
+		}
+
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.position = { 0.0f, -1.0f, 0.0f };
+		b3BodyId groundId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.baseMaterial.friction = 0.0f;
+		shapeDef.baseMaterial.restitution = 0.0f;
+		b3BoxHull box = b3MakeBoxHull( 40.0f, 1.0f, 40.0f );
+		b3ShapeId groundShapeId = b3CreateHullShape( groundId, &shapeDef, &box.base );
+		SetGroundShape( groundShapeId );
+
+		CreateScene();
+	}
+
+	b3BodyId CreateBall( float y, float velocityY, float restitution, bool hitEvents )
+	{
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.type = b3_dynamicBody;
+		bodyDef.position = { 0.0f, y, 0.0f };
+		bodyDef.linearVelocity = { 0.0f, velocityY, 0.0f };
+		bodyDef.enableSleep = false;
+		b3BodyId bodyId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.baseMaterial.friction = 0.0f;
+		shapeDef.baseMaterial.restitution = restitution;
+		shapeDef.enableHitEvents = hitEvents;
+		b3Sphere sphere = { b3Vec3_zero, 0.5f };
+		b3CreateSphereShape( bodyId, &shapeDef, &sphere );
+
+		return bodyId;
+	}
+
+	void CreateScene()
+	{
+		for ( int i = 0; i < m_bodyCount; ++i )
+		{
+			b3DestroyBody( m_bodyIds[i] );
+		}
+		m_bodyCount = 0;
+
+		if ( m_gravity )
+		{
+			b3World_SetGravity( m_worldId, { 0.0f, -10.0f, 0.0f } );
+		}
+		else
+		{
+			b3World_SetGravity( m_worldId, b3Vec3_zero );
+		}
+
+		for ( int i = 0; i < m_stackCount; ++i )
+		{
+			m_bodyIds[m_bodyCount] = CreateBall( 0.5f + 1.0f * i, 0.0f, 0.0f, false );
+			m_bodyCount += 1;
+		}
+
+		// Start half a step of travel above contact so the impact lands mid step, matching the test
+		m_startHeight = 0.5f + 1.0f * m_stackCount + 0.5f * m_impactSpeed * ( 1.0f / 60.0f );
+
+		m_impactorId = CreateBall( m_startHeight, -m_impactSpeed, m_restitution, true );
+		m_bodyIds[m_bodyCount] = m_impactorId;
+		m_bodyCount += 1;
+
+		float linear = 0.0f;
+		float angular = 0.0f;
+		float potential = 0.0f;
+		ComputeEnergy( m_worldId, m_bodyIds, m_bodyCount, &linear, &angular, &potential );
+		m_startEnergy = linear + angular + potential;
+		m_peakEnergy = m_startEnergy;
+
+		m_coefficient = 0.0f;
+		m_latched = false;
+		m_hit = false;
+	}
+
+	bool DrawControls() override
+	{
+		bool rebuild = false;
+
+		ImGui::PushItemWidth( 6.0f * ImGui::GetFontSize() );
+
+		if ( ImGui::SliderFloat( "Restitution", &m_restitution, 0.0f, 1.0f, "%.2f" ) )
+		{
+			rebuild = true;
+		}
+
+		if ( ImGui::SliderInt( "Stack", &m_stackCount, 0, m_maxStackCount ) )
+		{
+			rebuild = true;
+		}
+
+		ImGui::PopItemWidth();
+
+		if ( ImGui::Checkbox( "Gravity", &m_gravity ) )
+		{
+			rebuild = true;
+		}
+
+		if ( ImGui::Button( "Reset" ) )
+		{
+			rebuild = true;
+		}
+
+		if ( rebuild )
+		{
+			CreateScene();
+		}
+
+		return true;
+	}
+
+	void Step() override
+	{
+		Sample::Step();
+
+		b3ContactEvents events = b3World_GetContactEvents( m_worldId );
+		if ( events.hitCount > 0 )
+		{
+			m_hit = true;
+		}
+
+		float vy = b3Body_GetLinearVelocity( m_impactorId ).y;
+
+		// The rebound only means something once the impact has happened and the impactor is leaving
+		if ( m_latched == false && m_hit && vy > 0.0f )
+		{
+			m_coefficient = vy / m_impactSpeed;
+			m_latched = true;
+		}
+
+		float supportSpeed = 0.0f;
+		for ( int i = 0; i < m_stackCount; ++i )
+		{
+			supportSpeed = b3MaxFloat( supportSpeed, b3Length( b3Body_GetLinearVelocity( m_bodyIds[i] ) ) );
+		}
+
+		DrawLine( { -2.0f, m_startHeight, 0.0f }, { 2.0f, m_startHeight, 0.0f }, MakeColor( b3_colorRed ) );
+
+		float linear = 0.0f;
+		float angular = 0.0f;
+		float potential = 0.0f;
+		ComputeEnergy( m_worldId, m_bodyIds, m_bodyCount, &linear, &angular, &potential );
+		float total = linear + angular + potential;
+		m_peakEnergy = b3MaxFloat( m_peakEnergy, total );
+
+		DrawTextLine( "impactor vy = %.3f m/s", vy );
+
+		DrawTextLine( "coefficient = %.4f live (target %.2f)", vy / m_impactSpeed, m_restitution );
+
+		if ( m_latched )
+		{
+			DrawTextLine( "coefficient = %.4f at first rebound", m_coefficient );
+		}
+
+		DrawTextLine( "support speed = %.4f m/s", supportSpeed );
+
+		float scale = m_startEnergy != 0.0f ? 100.0f / m_startEnergy : 0.0f;
+		DrawTextLine( "kinetic   = %.3f J linear + %.3f J angular", linear, angular );
+		DrawTextLine( "potential = %.3f J", potential );
+		DrawTextLine( "total     = %.3f J (%.2f%% of start, peak %.2f%%)", total, scale * total, scale * m_peakEnergy );
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new SphereStackRestitution( context );
+	}
+
+	b3BodyId m_bodyIds[m_maxStackCount + 1] = {};
+	b3BodyId m_impactorId = b3_nullBodyId;
+	int m_bodyCount = 0;
+	int m_stackCount = 2;
+	float m_restitution = 1.0f;
+	float m_startHeight = 0.0f;
+	float m_coefficient = 0.0f;
+	float m_startEnergy = 0.0f;
+	float m_peakEnergy = 0.0f;
+	bool m_gravity = false;
+	bool m_latched = false;
+	bool m_hit = false;
+};
+
+static int sampleSphereStackRestitution = RegisterSample( "Shapes", "Sphere Stack Restitution", SphereStackRestitution::Create );
+
+// Similar to the MeasureFlatBounce and SpinTest unit tests
+class BoxRestitution : public Sample
+{
+public:
+	static constexpr float m_impactSpeed = 5.0f;
+
+	explicit BoxRestitution( SampleContext* context )
+		: Sample( context )
+	{
+		if ( context->restart == false )
+		{
+			m_camera->SetView( 20.0f, 10.0f, 14.0f, { 0.0f, 3.0f, 0.0f } );
+		}
+
+		// Gravity would bias the measured coefficient
+		b3World_SetGravity( m_worldId, b3Vec3_zero );
+
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.position = { 0.0f, -1.0f, 0.0f };
+		b3BodyId groundId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.baseMaterial.friction = 0.0f;
+		shapeDef.baseMaterial.restitution = 0.0f;
+		b3BoxHull box = b3MakeBoxHull( 40.0f, 1.0f, 40.0f );
+		b3ShapeId groundShapeId = b3CreateHullShape( groundId, &shapeDef, &box.base );
+		SetGroundShape( groundShapeId );
+
+		CreateScene();
+	}
+
+	void CreateScene()
+	{
+		if ( B3_IS_NON_NULL( m_boxId ) )
+		{
+			b3DestroyBody( m_boxId );
+		}
+
+		// Start half a step of travel above contact so the impact lands mid step, matching the test
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.type = b3_dynamicBody;
+		bodyDef.position = { 0.0f, 0.25f + 0.5f * m_impactSpeed * ( 1.0f / 60.0f ), 0.0f };
+		bodyDef.linearVelocity = { 0.0f, -m_impactSpeed, 0.0f };
+		bodyDef.angularVelocity = { 0.0f, 0.0f, m_spin };
+		bodyDef.enableSleep = false;
+		m_boxId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.density = 1.0f;
+		shapeDef.baseMaterial.friction = 0.0f;
+		shapeDef.baseMaterial.restitution = m_restitution;
+		shapeDef.enableHitEvents = true;
+		b3BoxHull box = b3MakeBoxHull( 1.0f, 0.25f, 1.0f );
+		b3CreateHullShape( m_boxId, &shapeDef, &box.base );
+
+		float linear = 0.0f;
+		float angular = 0.0f;
+		float potential = 0.0f;
+		ComputeEnergy( m_worldId, &m_boxId, 1, &linear, &angular, &potential );
+		m_startEnergy = linear + angular + potential;
+		m_peakEnergy = m_startEnergy;
+
+		m_coefficient = 0.0f;
+		m_latched = false;
+		m_hit = false;
+	}
+
+	bool DrawControls() override
+	{
+		bool rebuild = false;
+
+		ImGui::PushItemWidth( 6.0f * ImGui::GetFontSize() );
+
+		if ( ImGui::SliderFloat( "Restitution", &m_restitution, 0.0f, 1.0f, "%.2f" ) )
+		{
+			rebuild = true;
+		}
+
+		if ( ImGui::SliderFloat( "Spin", &m_spin, 0.0f, 2.0f, "%.2f" ) )
+		{
+			rebuild = true;
+		}
+
+		ImGui::PopItemWidth();
+
+		if ( ImGui::Button( "Reset" ) )
+		{
+			rebuild = true;
+		}
+
+		if ( rebuild )
+		{
+			CreateScene();
+		}
+
+		return true;
+	}
+
+	void Step() override
+	{
+		Sample::Step();
+
+		b3ContactEvents events = b3World_GetContactEvents( m_worldId );
+		if ( events.hitCount > 0 )
+		{
+			m_hit = true;
+		}
+
+		float vy = b3Body_GetLinearVelocity( m_boxId ).y;
+		b3Vec3 w = b3Body_GetAngularVelocity( m_boxId );
+
+		if ( m_latched == false && m_hit && vy > 0.0f )
+		{
+			m_coefficient = vy / m_impactSpeed;
+			m_latched = true;
+		}
+
+		Vec4 yellow = MakeColor( b3_colorYellow );
+		DrawPoint( b3Body_GetWorldPoint( m_boxId, { -1.0f, -0.25f, -1.0f } ), 8.0f, yellow );
+		DrawPoint( b3Body_GetWorldPoint( m_boxId, { 1.0f, -0.25f, -1.0f } ), 8.0f, yellow );
+		DrawPoint( b3Body_GetWorldPoint( m_boxId, { -1.0f, -0.25f, 1.0f } ), 8.0f, yellow );
+		DrawPoint( b3Body_GetWorldPoint( m_boxId, { 1.0f, -0.25f, 1.0f } ), 8.0f, yellow );
+
+		float linear = 0.0f;
+		float angular = 0.0f;
+		float potential = 0.0f;
+		ComputeEnergy( m_worldId, &m_boxId, 1, &linear, &angular, &potential );
+		float total = linear + angular + potential;
+		m_peakEnergy = b3MaxFloat( m_peakEnergy, total );
+
+		DrawTextLine( "vy = %.3f m/s", vy );
+
+		DrawTextLine( "coefficient = %.4f live (target %.2f)", vy / m_impactSpeed, m_restitution );
+
+		if ( m_latched )
+		{
+			DrawTextLine( "coefficient = %.4f at first rebound", m_coefficient );
+		}
+
+		// The spin is about z, so any x or y component is residual from the sequential point solve
+		DrawTextLine( "spin in = %.2f, spin out = %.4f (ideal %.2f at e = 1)", m_spin, w.z, -m_spin );
+		DrawTextLine( "off axis spin = %.4f rad/s", sqrtf( w.x * w.x + w.y * w.y ) );
+
+		float scale = m_startEnergy != 0.0f ? 100.0f / m_startEnergy : 0.0f;
+		DrawTextLine( "kinetic   = %.3f J linear + %.3f J angular", linear, angular );
+		DrawTextLine( "potential = %.3f J", potential );
+		DrawTextLine( "total     = %.3f J (%.2f%% of start, peak %.2f%%)", total, scale * total, scale * m_peakEnergy );
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new BoxRestitution( context );
+	}
+
+	b3BodyId m_boxId = b3_nullBodyId;
+	float m_restitution = 0.9f;
+	float m_spin = 0.0f;
+	float m_coefficient = 0.0f;
+	float m_startEnergy = 0.0f;
+	float m_peakEnergy = 0.0f;
+	bool m_latched = false;
+	bool m_hit = false;
+};
+
+static int sampleBoxRestitution = RegisterSample( "Shapes", "Box Restitution", BoxRestitution::Create );
 
 // This shows an optimization when creating many static shapes you can skip having them invoke collision, assuming
 // dynamic bodies are added after the static bodies.

@@ -204,7 +204,7 @@ void b3Free( void* mem, size_t size )
 
 	if ( b3_freeFcn != NULL )
 	{
-		b3_freeFcn( mem );
+		b3_freeFcn( mem, size );
 	}
 	else
 	{

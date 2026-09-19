@@ -76,7 +76,6 @@ typedef enum b3SolverStageType
 	b3_stageSolve,
 	b3_stageIntegratePositions,
 	b3_stageRelax,
-	b3_stageRestitution,
 	b3_stageStoreWideImpulses,
 	b3_stageStoreImpulses,
 } b3SolverStageType;

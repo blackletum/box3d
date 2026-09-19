@@ -47,6 +47,7 @@ extern int MeshTest( void );
 extern int MoverTest( void );
 extern int NameCacheTest( void );
 extern int RecordingTest( void );
+extern int RestitutionTest( void );
 extern int SeparatingAxisTest( void );
 extern int ShapeTest( void );
 extern int TableTest( void );
@@ -123,6 +124,7 @@ int main( int argc, char** argv )
 	MAYBE_RUN_TEST( MoverTest );
 	MAYBE_RUN_TEST( NameCacheTest );
 	MAYBE_RUN_TEST( RecordingTest );
+	MAYBE_RUN_TEST( RestitutionTest );
 	MAYBE_RUN_TEST( SeparatingAxisTest );
 	MAYBE_RUN_TEST( ShapeTest );
 	MAYBE_RUN_TEST( TableTest );

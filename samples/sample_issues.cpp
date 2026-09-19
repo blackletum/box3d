@@ -1146,6 +1146,7 @@ public:
 
 static int sampleWheelStack = RegisterSample( "Issues", "GMod Wheel Stack", WheelStack::Create );
 
+// There was a problem where this bouncing box could gain energy. This has been fixed by the deferred restitution update.
 class RestitutionOvershoot : public Sample
 {
 public:
@@ -1176,6 +1177,7 @@ public:
 		b3BodyDef boxDef = b3DefaultBodyDef();
 		boxDef.type = b3_dynamicBody;
 		boxDef.position = { 0.0f, m_dropHeight, 0.0f };
+		boxDef.safetyFactor = 0.1f;
 		m_boxBody = b3CreateBody( m_worldId, &boxDef );
 
 		b3ShapeDef boxShape = b3DefaultShapeDef();
@@ -1186,6 +1188,28 @@ public:
 		m_maxBounceY = 0.0f;
 		m_bounced = false;
 		m_failed = false;
+		m_startEnergy = MeasureEnergy();
+		m_maxEnergy = m_startEnergy;
+		m_energyFailed = false;
+	}
+
+	// Total mechanical energy. Perfect restitution and no friction, so this may only decrease. It is
+	// the honest invariant here: the height check cannot tell a bounce that gained potential energy
+	// from one that converted it into spin, and this drop does both.
+	float MeasureEnergy() const
+	{
+		b3MassData massData = b3Body_GetMassData( m_boxBody );
+		b3Vec3 v = b3Body_GetLinearVelocity( m_boxBody );
+		b3Vec3 w = b3Body_GetAngularVelocity( m_boxBody );
+
+		// The inertia tensor is in the body frame, so bring the angular velocity back to it
+		b3Vec3 wLocal = b3InvRotateVector( b3Body_GetRotation( m_boxBody ), w );
+
+		float kinetic = 0.5f * massData.mass * b3Dot( v, v ) + 0.5f * b3Dot( wLocal, b3MulMV( massData.inertia, wLocal ) );
+		float potential =
+			-massData.mass * b3Dot( b3World_GetGravity( m_worldId ), b3ToVec3( b3Body_GetWorldCenter( m_boxBody ) ) );
+
+		return kinetic + potential;
 	}
 
 	void Step() override
@@ -1221,9 +1245,32 @@ public:
 		b3Pos markerPoint = { 0.0f, m_dropHeight + m_boxHalf, 0.0f };
 		DrawPlane( b3Vec3_axisY, markerPoint, MakeColor( b3_colorYellow ) );
 
+		b3MassData massData = b3Body_GetMassData( m_boxBody );
+		b3Vec3 v = b3Body_GetLinearVelocity( m_boxBody );
+		b3Vec3 wLocal = b3InvRotateVector( b3Body_GetRotation( m_boxBody ), b3Body_GetAngularVelocity( m_boxBody ) );
+		float linear = 0.5f * massData.mass * b3Dot( v, v );
+		float angular = 0.5f * b3Dot( wLocal, b3MulMV( massData.inertia, wLocal ) );
+		float potential =
+			-massData.mass * b3Dot( b3World_GetGravity( m_worldId ), b3ToVec3( b3Body_GetWorldCenter( m_boxBody ) ) );
+		float total = linear + angular + potential;
+
+		if ( total > m_maxEnergy )
+		{
+			m_maxEnergy = total;
+		}
+
+		if ( m_bounced && total > m_startEnergy * ( 1.0f + m_energyTolerance ) )
+		{
+			m_energyFailed = true;
+		}
+
 		DrawTextLine( "drop height = %.2f m", m_dropHeight );
 		DrawTextLine( "current y   = %.2f m", m_currentY );
 		DrawTextLine( "max bounce  = %.2f m", m_maxBounceY );
+		DrawTextLine( "kinetic     = %.0f J linear + %.0f J angular", linear, angular );
+		DrawTextLine( "potential   = %.0f J", potential );
+		DrawTextLine( "total       = %.0f J (%.2f%% of start, peak %.2f%%)", total, 100.0f * total / m_startEnergy,
+					  100.0f * m_maxEnergy / m_startEnergy );
 
 		if ( m_bounced == false )
 		{
@@ -1237,6 +1284,15 @@ public:
 		{
 			DrawTextLine( "PASS: bounce stays at or below drop height" );
 		}
+
+		if ( m_energyFailed )
+		{
+			DrawTextLine( "FAIL: total energy increased" );
+		}
+		else if ( m_bounced )
+		{
+			DrawTextLine( "PASS: total energy did not increase" );
+		}
 	}
 
 	static Sample* Create( SampleContext* context )
@@ -1244,11 +1300,16 @@ public:
 		return new RestitutionOvershoot( context );
 	}
 
+	static constexpr float m_energyTolerance = 0.001f;
+
 	b3BodyId m_boxBody = {};
 	float m_currentY = 0.0f;
 	float m_maxBounceY = 0.0f;
+	float m_startEnergy = 0.0f;
+	float m_maxEnergy = 0.0f;
 	bool m_bounced = false;
 	bool m_failed = false;
+	bool m_energyFailed = false;
 };
 
 static int sampleRestitutionOvershoot = RegisterSample( "Issues", "Restitution Overshoot", RestitutionOvershoot::Create );

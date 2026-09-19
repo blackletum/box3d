@@ -554,7 +554,6 @@ typedef struct b3Profile
 	float solveImpulses;
 	float integratePositions;
 	float relaxImpulses;
-	float applyRestitution;
 	float storeImpulses;
 	float splitIslands;
 	float transforms;
@@ -2657,6 +2656,8 @@ typedef struct b3ManifoldPoint
 
 	/// Relative normal velocity pre-solve. Used for hit events. If the normal impulse is
 	/// zero then there was no hit. Negative means shapes are approaching.
+	/// Performance is improved by leaving this zero unless needed for restitution
+	/// or hit events.
 	float normalVelocity;
 
 	/// Local point for matching

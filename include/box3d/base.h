@@ -93,11 +93,11 @@
 /// Prototype for user allocation function.
 ///	@param size the allocation size in bytes
 ///	@param alignment the required alignment, guaranteed to be a power of 2
-typedef void* b3AllocFcn( int32_t size, int32_t alignment );
+typedef void* b3AllocFcn( size_t size, int32_t alignment );
 
 /// Prototype for user free function.
 ///	@param mem the memory previously allocated through `b3AllocFcn`
-typedef void b3FreeFcn( void* mem );
+typedef void b3FreeFcn( void* mem, size_t size );
 
 /// Prototype for the user assert callback. Return 0 to skip the debugger break.
 typedef int b3AssertFcn( const char* condition, const char* fileName, int lineNumber );
