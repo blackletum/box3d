@@ -4,6 +4,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 // Compile-time options. Edit box3d/config.h, or define BOX3D_USER_CONFIG to
@@ -97,6 +98,7 @@ typedef void* b3AllocFcn( size_t size, int32_t alignment );
 
 /// Prototype for user free function.
 ///	@param mem the memory previously allocated through `b3AllocFcn`
+///	@param size the size of the allocation in bytes.
 typedef void b3FreeFcn( void* mem, size_t size );
 
 /// Prototype for the user assert callback. Return 0 to skip the debugger break.
