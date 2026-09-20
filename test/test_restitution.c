@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Erin Catto
 // SPDX-License-Identifier: MIT
 
+#include "body.h"
 #include "physics_world.h"
 #include "recording.h"
 #include "test_macros.h"
@@ -10,6 +11,7 @@
 #include "box3d/math_functions.h"
 
 #include <float.h>
+#include <math.h>
 #include <stdio.h>
 
 #define TIME_STEP ( 1.0f / 60.0f )
@@ -924,6 +926,179 @@ static int OvershootTest( void )
 	return failed;
 }
 
+typedef struct ImpulseResult
+{
+	float worstError;
+	float approachSpeed;
+	float firstSeparation;
+	float bounceImpulse;
+	int contactSteps;
+	int toiSteps;
+	int toiImpulseSteps;
+} ImpulseResult;
+
+// Ball dropped under gravity with the contact impulse read back every step. Nothing else touches the
+// ball, so once gravity is taken out the change in momentum over a step is the impulse the contact
+// applied, and that is what the total normal impulse must report. A time of impact step is left out
+// of the balance: no contact was solved on it, and the sweep hands back the gravity of the time it
+// cut short.
+static ImpulseResult MeasureDropImpulse( float restitution, float dropHeight )
+{
+	b3WorldId worldId = MakeWorld( -10.0f );
+	MakeGround( worldId, 0.0f );
+
+	b3BodyId ballId = MakeBall( worldId, 0.0f, 0.5f + dropHeight, 0.0f, restitution );
+	b3World* world = b3GetWorldFromId( worldId );
+
+	float mass = b3Body_GetMass( ballId );
+	float gravityY = b3World_GetGravity( worldId ).y;
+
+	ImpulseResult result = { 0 };
+	bool touched = false;
+	bool bouncing = false;
+
+	// Enough for the longest fall and the bounce that follows it
+	for ( int i = 0; i < 240; ++i )
+	{
+		float speedBefore = b3Body_GetLinearVelocity( ballId ).y;
+		b3World_Step( worldId, TIME_STEP, SUB_STEP_COUNT );
+		float speedAfter = b3Body_GetLinearVelocity( ballId ).y;
+
+		float measured = 0.0f;
+		float separation = 0.0f;
+		b3ContactData contactData[4];
+		int contactCount = b3Body_GetContactData( ballId, contactData, ARRAY_COUNT( contactData ) );
+		for ( int c = 0; c < contactCount; ++c )
+		{
+			for ( int m = 0; m < contactData[c].manifoldCount; ++m )
+			{
+				const b3Manifold* manifold = contactData[c].manifolds + m;
+				for ( int p = 0; p < manifold->pointCount; ++p )
+				{
+					measured += manifold->points[p].totalNormalImpulse;
+					separation = manifold->points[p].separation;
+				}
+			}
+		}
+
+		// The sim flag is the one written this step, the body flag lags a step behind
+		b3Body* ball = b3GetBodyFullId( world, ballId );
+		b3BodySim* ballSim = b3GetBodySim( world, ball );
+		if ( ballSim->flags & b3_hadTimeOfImpact )
+		{
+			result.toiSteps += 1;
+			if ( measured != 0.0f )
+			{
+				result.toiImpulseSteps += 1;
+			}
+			continue;
+		}
+
+		float expected = mass * ( speedAfter - speedBefore ) - mass * gravityY * TIME_STEP;
+		result.worstError = b3MaxFloat( result.worstError, b3AbsFloat( measured - expected ) );
+
+		if ( contactCount > 0 )
+		{
+			if ( touched == false )
+			{
+				touched = true;
+				bouncing = true;
+				result.approachSpeed = -speedBefore;
+				result.firstSeparation = separation;
+			}
+
+			if ( bouncing )
+			{
+				result.bounceImpulse += measured;
+				result.contactSteps += 1;
+			}
+		}
+		else
+		{
+			bouncing = false;
+		}
+	}
+
+	b3DestroyWorld( worldId );
+	return result;
+}
+
+// Heights on both sides of the continuous collision threshold, so the impulse is checked for a ball
+// that lands inside the overlap and for one the sweep sets down on the surface. The threshold is
+// derived from the body so the split survives a change to the default safety factor.
+//
+// The step balance is the real gate. The bounce total is bracketed as well so the restitution sweep
+// means something: the contact has to reverse the approach at the coefficient and may carry the
+// weight for at most as long as it lasted. The bounce retires inside the step once the point
+// separates, so the ball can lose up to a step of gravity below the reversal.
+static int ImpulseTest( void )
+{
+	static const float restitutions[] = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
+	static const float heights[] = { 1.0f, 5.0f, 20.0f, 45.0f };
+
+	float mass;
+	float fastSpeed;
+	{
+		b3WorldId worldId = MakeWorld( -10.0f );
+		b3BodyId ballId = MakeBall( worldId, 0.0f, 0.5f, 0.0f, 0.0f );
+		mass = b3Body_GetMass( ballId );
+		fastSpeed = b3Body_GetSafetyFactor( ballId ) * b3Body_GetMinExtent( ballId ) / TIME_STEP;
+		b3DestroyWorld( worldId );
+	}
+
+	const float weightImpulse = mass * 10.0f * TIME_STEP;
+
+	int failed = 0;
+
+	for ( int j = 0; j < ARRAY_COUNT( heights ); ++j )
+	{
+		float impactSpeed = sqrtf( 20.0f * heights[j] );
+		bool expectToi = impactSpeed > fastSpeed;
+
+		// Float noise in the solver velocities scales with the impact speed, and the ball is heavy
+		float tolerance = 1e-5f * mass * ( 10.0f + impactSpeed );
+
+		for ( int k = 0; k < ARRAY_COUNT( restitutions ); ++k )
+		{
+			ImpulseResult result = MeasureDropImpulse( restitutions[k], heights[j] );
+
+			float reversal = ( 1.0f + restitutions[k] ) * mass * result.approachSpeed;
+			float lower = reversal - weightImpulse;
+			float upper = reversal + weightImpulse * result.contactSteps;
+
+			printf( "    impulse drop %4.1f e %.2f toi %d at %+.4f -> worst step error %.1e, bounce %.1f in [%.1f, %.1f] over %d "
+					"steps\n",
+					heights[j], restitutions[k], result.toiSteps, result.firstSeparation, result.worstError, result.bounceImpulse,
+					lower, upper, result.contactSteps );
+
+			if ( result.worstError > tolerance )
+			{
+				failed = 1;
+			}
+
+			if ( result.contactSteps == 0 || result.toiImpulseSteps > 0 )
+			{
+				failed = 1;
+			}
+
+			float slack = result.contactSteps * tolerance;
+			if ( result.bounceImpulse < lower - slack || result.bounceImpulse > upper + slack )
+			{
+				failed = 1;
+			}
+
+			if ( ( result.toiSteps > 0 ) != expectToi )
+			{
+				printf( "    continuous collision %s at %.1f m/s (threshold %.1f m/s)\n", expectToi ? "expected" : "unexpected",
+						impactSpeed, fastSpeed );
+				failed = 1;
+			}
+		}
+	}
+
+	return failed;
+}
+
 static int WorkerParityTest( void )
 {
 	uint64_t hash1 = RunWorkerScene( 1 );
@@ -953,6 +1128,7 @@ int RestitutionTest( void )
 	RUN_MEASUREMENT( RestingTest );
 	RUN_MEASUREMENT( NormalVelocityTest );
 	RUN_MEASUREMENT( OvershootTest );
+	RUN_MEASUREMENT( ImpulseTest );
 	RUN_MEASUREMENT( WorkerParityTest );
 
 	return failureCount > 0 ? 1 : 0;

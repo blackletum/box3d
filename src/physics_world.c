@@ -1565,9 +1565,7 @@ void b3World_Draw( b3WorldId worldId, b3DebugDraw* draw, uint64_t maskBits )
 								{
 									// Hack inv_dt for single step debugging
 									float inv_dt = world->inv_dt > 0.0f ? world->inv_dt : 60.0f;
-									// todo validate
-									// multiply by one-half due to relax iteration
-									float force = 0.5f * mp->totalNormalImpulse * inv_dt;
+									float force = mp->totalNormalImpulse * inv_dt;
 									b3Pos p1 = p;
 									b3Pos p2 = b3OffsetPos( p1, b3MulSV( draw->forceScale * force, normal ) );
 									draw->DrawSegmentFcn( p1, p2, impulseColor, draw->context );

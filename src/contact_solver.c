@@ -482,7 +482,6 @@ void b3PushContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 				float newImpulse = b3MaxFloat( cp->normalImpulse + deltaImpulse, 0.0f );
 				deltaImpulse = newImpulse - cp->normalImpulse;
 				cp->normalImpulse = newImpulse;
-				cp->totalNormalImpulse += newImpulse;
 
 				// apply normal impulse
 				b3Vec3 P = b3MulSV( deltaImpulse, normal );
@@ -1750,7 +1749,6 @@ void b3PushContacts_Convex( b3SolverBlock block, b3StepContext* context )
 			b3FloatW newImpulse = b3MaxW( b3SubW( cp->normalImpulses, negImpulse ), b3ZeroW() );
 			b3FloatW deltaImpulse = b3SubW( newImpulse, cp->normalImpulses );
 			cp->normalImpulses = newImpulse;
-			cp->totalNormalImpulses = b3AddW( cp->totalNormalImpulses, newImpulse );
 
 			// Apply contact impulse
 			b3Vec3W P = b3MulSVW( deltaImpulse, c->normal );

@@ -728,6 +728,177 @@ public:
 
 static int sampleBoxRestitution = RegisterSample( "Shapes", "Box Restitution", BoxRestitution::Create );
 
+// Similar to the ImpulseTest unit test. The hit event marks the bounce and carries the approach speed,
+// so the impulse the contact reports can be checked against reversing that speed at the coefficient.
+// The total runs a little over because the contact also carries the weight for the part of the step
+// it is active.
+class BounceImpulse : public Sample
+{
+public:
+	explicit BounceImpulse( SampleContext* context )
+		: Sample( context )
+	{
+		if ( context->restart == false )
+		{
+			m_camera->SetView( 20.0f, 10.0f, 36.0f, { 0.0f, 8.0f, 0.0f } );
+		}
+
+		b3World_SetGravity( m_worldId, { 0.0f, -10.0f, 0.0f } );
+
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.position = { 0.0f, -1.0f, 0.0f };
+		b3BodyId groundId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.baseMaterial.friction = 0.0f;
+		shapeDef.baseMaterial.restitution = 0.0f;
+		b3BoxHull box = b3MakeBoxHull( 40.0f, 1.0f, 40.0f );
+		b3ShapeId groundShapeId = b3CreateHullShape( groundId, &shapeDef, &box.base );
+		SetGroundShape( groundShapeId );
+
+		CreateScene();
+	}
+
+	void CreateScene()
+	{
+		if ( B3_IS_NON_NULL( m_ballId ) )
+		{
+			b3DestroyBody( m_ballId );
+		}
+
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.type = b3_dynamicBody;
+		bodyDef.position = { 0.0f, 0.5f + m_dropHeight, 0.0f };
+		bodyDef.enableSleep = false;
+		m_ballId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.baseMaterial.friction = 0.0f;
+		shapeDef.baseMaterial.restitution = m_restitution;
+		shapeDef.enableHitEvents = true;
+		b3Sphere sphere = { b3Vec3_zero, 0.5f };
+		b3CreateSphereShape( m_ballId, &shapeDef, &sphere );
+
+		m_mass = b3Body_GetMass( m_ballId );
+
+		m_approachSpeed = 0.0f;
+		m_totalImpulse = 0.0f;
+		m_expectedImpulse = 0.0f;
+		m_contactSteps = 0;
+		m_hit = false;
+		m_bouncing = false;
+	}
+
+	bool DrawControls() override
+	{
+		bool rebuild = false;
+
+		ImGui::PushItemWidth( 6.0f * ImGui::GetFontSize() );
+
+		if ( ImGui::SliderFloat( "Restitution", &m_restitution, 0.0f, 1.0f, "%.2f" ) )
+		{
+			rebuild = true;
+		}
+
+		if ( ImGui::SliderFloat( "Height", &m_dropHeight, 0.5f, 50.0f, "%.1f" ) )
+		{
+			rebuild = true;
+		}
+
+		ImGui::PopItemWidth();
+
+		if ( ImGui::Button( "Reset" ) )
+		{
+			rebuild = true;
+		}
+
+		if ( rebuild )
+		{
+			CreateScene();
+		}
+
+		return true;
+	}
+
+	void Step() override
+	{
+		Sample::Step();
+
+		if ( m_didStep )
+		{
+			b3ContactEvents events = b3World_GetContactEvents( m_worldId );
+			if ( m_hit == false && events.hitCount > 0 )
+			{
+				m_hit = true;
+				m_bouncing = true;
+				m_approachSpeed = events.hitEvents[0].approachSpeed;
+				m_expectedImpulse = ( 1.0f + m_restitution ) * m_mass * m_approachSpeed;
+			}
+
+			// Keep summing until the contact lets go, a slow bounce can take a few steps to leave
+			if ( m_bouncing )
+			{
+				b3ContactData contactData[4];
+				int contactCount = b3Body_GetContactData( m_ballId, contactData, 4 );
+				for ( int c = 0; c < contactCount; ++c )
+				{
+					for ( int m = 0; m < contactData[c].manifoldCount; ++m )
+					{
+						const b3Manifold* manifold = contactData[c].manifolds + m;
+						for ( int p = 0; p < manifold->pointCount; ++p )
+						{
+							m_totalImpulse += manifold->points[p].totalNormalImpulse;
+						}
+					}
+				}
+
+				if ( contactCount > 0 )
+				{
+					m_contactSteps += 1;
+				}
+				else
+				{
+					m_bouncing = false;
+				}
+			}
+		}
+
+		float startHeight = 0.5f + m_dropHeight;
+		DrawLine( { -2.0f, startHeight, 0.0f }, { 2.0f, startHeight, 0.0f }, MakeColor( b3_colorRed ) );
+
+		DrawTextLine( "vy = %.3f m/s", b3Body_GetLinearVelocity( m_ballId ).y );
+
+		if ( m_hit )
+		{
+			DrawTextLine( "approach speed = %.3f m/s", m_approachSpeed );
+			DrawTextLine( "total impulse = %.2f N s over %d steps", m_totalImpulse, m_contactSteps );
+			DrawTextLine( "expected impulse = %.2f N s", m_expectedImpulse );
+		}
+		else
+		{
+			DrawTextLine( "waiting for the hit" );
+		}
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new BounceImpulse( context );
+	}
+
+	b3BodyId m_ballId = b3_nullBodyId;
+	float m_restitution = 0.5f;
+	float m_dropHeight = 20.0f;
+	float m_mass = 0.0f;
+	float m_approachSpeed = 0.0f;
+	float m_totalImpulse = 0.0f;
+	float m_expectedImpulse = 0.0f;
+	int m_contactSteps = 0;
+	bool m_hit = false;
+	bool m_bouncing = false;
+};
+
+static int sampleBounceImpulse = RegisterSample( "Shapes", "Bounce Impulse", BounceImpulse::Create );
+
 // This shows an optimization when creating many static shapes you can skip having them invoke collision, assuming
 // dynamic bodies are added after the static bodies.
 class StaticInvoke : public Sample
