@@ -120,7 +120,7 @@ typedef struct b3AtomicI64
 } b3AtomicI64;
 
 // Minimum memory alignment used for all allocations
-#define B3_ALIGNMENT 16
+#define B3_ALIGNMENT 64
 
 #define B3_RESTRICT restrict
 
