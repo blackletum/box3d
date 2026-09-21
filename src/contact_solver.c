@@ -1103,140 +1103,66 @@ typedef struct b3BodyStateW
 
 #if defined( B3_SIMD_SSE2 ) || defined( B3_SIMD_NEON )
 
+_Static_assert( sizeof( b3BodyState ) == 64, "body state layout" );
+_Static_assert( offsetof( b3BodyState, linearVelocity ) == 0 && offsetof( b3BodyState, angularVelocity ) == 16 &&
+					offsetof( b3BodyState, deltaPosition ) == 32 && offsetof( b3BodyState, deltaRotation ) == 48,
+				"body state layout" );
+
 B3_FORCE_INLINE b3BodyStateW b3GatherBodies( const b3BodyState* B3_RESTRICT states, const int* B3_RESTRICT indices )
 {
-	b3BodyState dummy = { 0 };
-	dummy.deltaRotation.s = 1.0f;
+	const float* identity = (const float*)&b3_identityBodyState;
 
 	// Indices are 0 for null
-	b3BodyState b1 = indices[0] == 0 ? dummy : states[indices[0] - 1];
-	b3BodyState b2 = indices[1] == 0 ? dummy : states[indices[1] - 1];
-	b3BodyState b3 = indices[2] == 0 ? dummy : states[indices[2] - 1];
-	b3BodyState b4 = indices[3] == 0 ? dummy : states[indices[3] - 1];
+	const float* p1 = indices[0] == 0 ? identity : (const float*)( states + indices[0] - 1 );
+	const float* p2 = indices[1] == 0 ? identity : (const float*)( states + indices[1] - 1 );
+	const float* p3 = indices[2] == 0 ? identity : (const float*)( states + indices[2] - 1 );
+	const float* p4 = indices[3] == 0 ? identity : (const float*)( states + indices[3] - 1 );
 
 	b3BodyStateW s;
-	s.v.X = b3SetW( b1.linearVelocity.x, b2.linearVelocity.x, b3.linearVelocity.x, b4.linearVelocity.x );
-	s.v.Y = b3SetW( b1.linearVelocity.y, b2.linearVelocity.y, b3.linearVelocity.y, b4.linearVelocity.y );
-	s.v.Z = b3SetW( b1.linearVelocity.z, b2.linearVelocity.z, b3.linearVelocity.z, b4.linearVelocity.z );
-
-	s.w.X = b3SetW( b1.angularVelocity.x, b2.angularVelocity.x, b3.angularVelocity.x, b4.angularVelocity.x );
-	s.w.Y = b3SetW( b1.angularVelocity.y, b2.angularVelocity.y, b3.angularVelocity.y, b4.angularVelocity.y );
-	s.w.Z = b3SetW( b1.angularVelocity.z, b2.angularVelocity.z, b3.angularVelocity.z, b4.angularVelocity.z );
-
-	s.dp.X = b3SetW( b1.deltaPosition.x, b2.deltaPosition.x, b3.deltaPosition.x, b4.deltaPosition.x );
-	s.dp.Y = b3SetW( b1.deltaPosition.y, b2.deltaPosition.y, b3.deltaPosition.y, b4.deltaPosition.y );
-	s.dp.Z = b3SetW( b1.deltaPosition.z, b2.deltaPosition.z, b3.deltaPosition.z, b4.deltaPosition.z );
-
-	s.dq.V.X = b3SetW( b1.deltaRotation.v.x, b2.deltaRotation.v.x, b3.deltaRotation.v.x, b4.deltaRotation.v.x );
-	s.dq.V.Y = b3SetW( b1.deltaRotation.v.y, b2.deltaRotation.v.y, b3.deltaRotation.v.y, b4.deltaRotation.v.y );
-	s.dq.V.Z = b3SetW( b1.deltaRotation.v.z, b2.deltaRotation.v.z, b3.deltaRotation.v.z, b4.deltaRotation.v.z );
-	s.dq.S = b3SetW( b1.deltaRotation.s, b2.deltaRotation.s, b3.deltaRotation.s, b4.deltaRotation.s );
+	b3FloatW pad;
+	b3TransposeW( b3LoadW( p1 ), b3LoadW( p2 ), b3LoadW( p3 ), b3LoadW( p4 ), &s.v.X, &s.v.Y, &s.v.Z, &pad );
+	b3TransposeW( b3LoadW( p1 + 4 ), b3LoadW( p2 + 4 ), b3LoadW( p3 + 4 ), b3LoadW( p4 + 4 ), &s.w.X, &s.w.Y, &s.w.Z, &pad );
+	b3TransposeW( b3LoadW( p1 + 8 ), b3LoadW( p2 + 8 ), b3LoadW( p3 + 8 ), b3LoadW( p4 + 8 ), &s.dp.X, &s.dp.Y, &s.dp.Z, &pad );
+	b3TransposeW( b3LoadW( p1 + 12 ), b3LoadW( p2 + 12 ), b3LoadW( p3 + 12 ), b3LoadW( p4 + 12 ), &s.dq.V.X, &s.dq.V.Y,
+				  &s.dq.V.Z, &s.dq.S );
 	return s;
+}
+
+B3_FORCE_INLINE void b3StoreBodyVelocity( b3BodyState* B3_RESTRICT states, int index, b3FloatW v, b3FloatW w )
+{
+	// Indices are 0 for null
+	if ( index == 0 )
+	{
+		return;
+	}
+
+	b3BodyState* state = states + index - 1;
+	uint32_t flags = state->flags;
+	if ( ( flags & b3_dynamicFlag ) == 0 )
+	{
+		return;
+	}
+
+	b3StoreW( (float*)state, v );
+	b3StoreW( (float*)state + 4, w );
 }
 
 // This writes only the velocities back to the solver bodies
 B3_FORCE_INLINE void b3ScatterBodies( b3BodyState* B3_RESTRICT states, const int* B3_RESTRICT indices,
 									  const b3BodyStateW* B3_RESTRICT simdBody )
 {
-	const float* vx = (const float*)&simdBody->v.X;
-	const float* vy = (const float*)&simdBody->v.Y;
-	const float* vz = (const float*)&simdBody->v.Z;
-	const float* wx = (const float*)&simdBody->w.X;
-	const float* wy = (const float*)&simdBody->w.Y;
-	const float* wz = (const float*)&simdBody->w.Z;
-
 	// I don't use any dummy body in the body array because this will lead to multithreaded sharing and the
 	// associated cache flushing.
+	b3FloatW zero = b3ZeroW();
+	b3FloatW v1, v2, v3, v4;
+	b3TransposeW( simdBody->v.X, simdBody->v.Y, simdBody->v.Z, zero, &v1, &v2, &v3, &v4 );
+	b3FloatW w1, w2, w3, w4;
+	b3TransposeW( simdBody->w.X, simdBody->w.Y, simdBody->w.Z, zero, &w1, &w2, &w3, &w4 );
 
-	// Warning: indices start at 1 with 0 indicating null
-
-	if ( indices[0] != 0 && ( states[indices[0] - 1].flags & b3_dynamicFlag ) != 0 )
-	{
-		b3BodyState* s = states + ( indices[0] - 1 );
-
-		b3Vec3 v = { vx[0], vy[0], vz[0] };
-		b3Vec3 w = { wx[0], wy[0], wz[0] };
-
-		uint32_t flags = s->flags;
-		if ( flags & b3_allLocks )
-		{
-			v.x = ( flags & b3_lockLinearX ) ? 0.0f : v.x;
-			v.y = ( flags & b3_lockLinearY ) ? 0.0f : v.y;
-			v.z = ( flags & b3_lockLinearZ ) ? 0.0f : v.z;
-			w.x = ( flags & b3_lockAngularX ) ? 0.0f : w.x;
-			w.y = ( flags & b3_lockAngularY ) ? 0.0f : w.y;
-			w.z = ( flags & b3_lockAngularZ ) ? 0.0f : w.z;
-		}
-
-		s->linearVelocity = v;
-		s->angularVelocity = w;
-	}
-
-	if ( indices[1] != 0 && ( states[indices[1] - 1].flags & b3_dynamicFlag ) != 0 )
-	{
-		b3BodyState* s = states + ( indices[1] - 1 );
-
-		b3Vec3 v = { vx[1], vy[1], vz[1] };
-		b3Vec3 w = { wx[1], wy[1], wz[1] };
-
-		uint32_t flags = s->flags;
-		if ( flags & b3_allLocks )
-		{
-			v.x = ( flags & b3_lockLinearX ) ? 0.0f : v.x;
-			v.y = ( flags & b3_lockLinearY ) ? 0.0f : v.y;
-			v.z = ( flags & b3_lockLinearZ ) ? 0.0f : v.z;
-			w.x = ( flags & b3_lockAngularX ) ? 0.0f : w.x;
-			w.y = ( flags & b3_lockAngularY ) ? 0.0f : w.y;
-			w.z = ( flags & b3_lockAngularZ ) ? 0.0f : w.z;
-		}
-
-		s->linearVelocity = v;
-		s->angularVelocity = w;
-	}
-
-	if ( indices[2] != 0 && ( states[indices[2] - 1].flags & b3_dynamicFlag ) != 0 )
-	{
-		b3BodyState* s = states + ( indices[2] - 1 );
-
-		b3Vec3 v = { vx[2], vy[2], vz[2] };
-		b3Vec3 w = { wx[2], wy[2], wz[2] };
-
-		uint32_t flags = s->flags;
-		if ( flags & b3_allLocks )
-		{
-			v.x = ( flags & b3_lockLinearX ) ? 0.0f : v.x;
-			v.y = ( flags & b3_lockLinearY ) ? 0.0f : v.y;
-			v.z = ( flags & b3_lockLinearZ ) ? 0.0f : v.z;
-			w.x = ( flags & b3_lockAngularX ) ? 0.0f : w.x;
-			w.y = ( flags & b3_lockAngularY ) ? 0.0f : w.y;
-			w.z = ( flags & b3_lockAngularZ ) ? 0.0f : w.z;
-		}
-
-		s->linearVelocity = v;
-		s->angularVelocity = w;
-	}
-
-	if ( indices[3] != 0 && ( states[indices[3] - 1].flags & b3_dynamicFlag ) != 0 )
-	{
-		b3BodyState* s = states + ( indices[3] - 1 );
-
-		b3Vec3 v = { vx[3], vy[3], vz[3] };
-		b3Vec3 w = { wx[3], wy[3], wz[3] };
-
-		uint32_t flags = s->flags;
-		if ( flags & b3_allLocks )
-		{
-			v.x = ( flags & b3_lockLinearX ) ? 0.0f : v.x;
-			v.y = ( flags & b3_lockLinearY ) ? 0.0f : v.y;
-			v.z = ( flags & b3_lockLinearZ ) ? 0.0f : v.z;
-			w.x = ( flags & b3_lockAngularX ) ? 0.0f : w.x;
-			w.y = ( flags & b3_lockAngularY ) ? 0.0f : w.y;
-			w.z = ( flags & b3_lockAngularZ ) ? 0.0f : w.z;
-		}
-
-		s->linearVelocity = v;
-		s->angularVelocity = w;
-	}
+	b3StoreBodyVelocity( states, indices[0], v1, w1 );
+	b3StoreBodyVelocity( states, indices[1], v2, w2 );
+	b3StoreBodyVelocity( states, indices[2], v3, w3 );
+	b3StoreBodyVelocity( states, indices[3], v4, w4 );
 }
 
 #else // non-simd

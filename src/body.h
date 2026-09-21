@@ -159,28 +159,30 @@ typedef struct b3Body
 // according to substep progress. Contacts have reduced stability when anchors are rotated during substeps, especially for
 // round shapes.
 //
-// 56 bytes
-// todo_erin measure perf padding to 64 bytes
+// 64 bytes
 typedef struct b3BodyState
 {
-	b3Vec3 linearVelocity;	// 12
+	b3Vec3 linearVelocity; // 12
+	float padding1;
+
 	b3Vec3 angularVelocity; // 12
+	float padding2;
 
 	// Using delta position reduces round-off error far from the origin
 	b3Vec3 deltaPosition; // 12
 
-	// Using delta rotation because I cannot access the full rotation on static bodies in
-	// the solver and must use zero delta rotation for static bodies (c,s) = (1,0)
-	b3Quat deltaRotation; // 16
-
 	// b3BodyFlags
 	// Important flags: locking, dynamic
 	uint32_t flags; // 4
+
+	// Using delta rotation because I cannot access the full rotation on static bodies in
+	// the solver and must use zero delta rotation for static bodies (c,s) = (1,0)
+	b3Quat deltaRotation; // 16
 } b3BodyState;
 
 // Identity body state, notice the deltaRotation is identity
 static const b3BodyState b3_identityBodyState = {
-	{ 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { { 0.0f, 0.0f, 0.0f }, 1.0f }, 0,
+	{ 0.0f, 0.0f, 0.0f }, 0.0f, { 0.0f, 0.0f, 0.0f }, 0.0f, { 0.0f, 0.0f, 0.0f }, 0, { { 0.0f, 0.0f, 0.0f }, 1.0f },
 };
 
 // Body simulation data used for integration of position and velocity
@@ -192,6 +194,12 @@ typedef struct b3BodySim
 
 	// center of mass position in world space
 	b3Pos center;
+
+	// b3BodyFlags
+	uint32_t flags;
+
+	float minExtent;
+	b3Vec3 maxExtent;
 
 	// previous rotation and COM for TOI
 	b3Quat rotation0;
@@ -210,17 +218,12 @@ typedef struct b3BodySim
 	b3Matrix3 invInertiaLocal;
 	b3Matrix3 invInertiaWorld;
 
-	float minExtent;
-	b3Vec3 maxExtent;
 	float linearDamping;
 	float angularDamping;
 	float gravityScale;
 
 	// Index of b3Body
 	int bodyId;
-
-	// b3BodyFlags
-	uint32_t flags;
 } b3BodySim;
 
 // Get a validated body from a world using an id.
