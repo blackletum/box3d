@@ -1045,6 +1045,7 @@ typedef struct b3ContactConstraintWide
 	b3FloatW rollingResistance;
 	b3FloatW tangentVelocity1;
 	b3FloatW tangentVelocity2;
+	b3FloatW anyRestitution;
 
 	b3Manifold* manifolds[B3_SIMD_WIDTH];
 
@@ -1506,8 +1507,11 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 			c->tangentVelocity1 = b3DotW( tangentVelocity, tangent1 );
 			c->tangentVelocity2 = b3DotW( tangentVelocity, tangent2 );
 
+			b3FloatW rollingMask = b3GreaterThanW( c->rollingResistance, zeroW );
 			c->twistImpulse = b3MulW( warmStartScale, twistImpulse );
-			c->rollingImpulse = b3MulSVW( warmStartScale, rollingImpulse );
+			c->rollingImpulse.X = b3BlendW( zeroW, b3MulW( warmStartScale, rollingImpulse.X ), rollingMask );
+			c->rollingImpulse.Y = b3BlendW( zeroW, b3MulW( warmStartScale, rollingImpulse.Y ), rollingMask );
+			c->rollingImpulse.Z = b3BlendW( zeroW, b3MulW( warmStartScale, rollingImpulse.Z ), rollingMask );
 			c->frictionImpulse.x = b3MulW( warmStartScale, b3DotW( frictionImpulse, tangent1 ) );
 			c->frictionImpulse.y = b3MulW( warmStartScale, b3DotW( frictionImpulse, tangent2 ) );
 
@@ -1622,6 +1626,7 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 
 			// Only sample contact point normal velocity if needed.
 			b3FloatW restitutionMask = b3GreaterThanW( restitution, zeroW );
+			b3FloatW anyRestitution = zeroW;
 			if ( hitEventLanes != 0 || b3AnyTrueW( restitutionMask ) )
 			{
 				b3BodyStateW bA = b3GatherBodies( states, c->indexA );
@@ -1638,6 +1643,7 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 
 					b3FloatW bounce = b3AndW( b3AndW( b3LessThanW( vn, negRestitutionThreshold ), restitutionMask ), pointMask );
 					cp->negRestitutionVelocities = b3BlendW( zeroW, b3MulW( restitution, vn ), bounce );
+					anyRestitution = b3OrW( anyRestitution, cp->negRestitutionVelocities );
 
 					if ( hitEventLanes != 0 )
 					{
@@ -1654,6 +1660,8 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 					}
 				}
 			}
+
+			c->anyRestitution = anyRestitution;
 		}
 
 		// Advance to next color
@@ -1722,6 +1730,7 @@ void b3WarmStartContacts_Convex( b3SolverBlock block, b3StepContext* context )
 		}
 
 		// Rolling resistance
+		if ( b3AllZeroW( c->rollingResistance ) == false )
 		{
 			b3Vec3W impulse = c->rollingImpulse;
 			bA.w = b3MulSubMVW( bA.w, c->invIA, impulse );
@@ -1860,12 +1869,7 @@ void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 		b3BodyStateW bA = b3GatherBodies( states, c->indexA );
 		b3BodyStateW bB = b3GatherBodies( states, c->indexB );
 
-		b3FloatW anyRestitution = c->points[0].negRestitutionVelocities;
-		for ( int pointIndex = 1; pointIndex < pointCount; ++pointIndex )
-		{
-			anyRestitution = b3OrW( anyRestitution, c->points[pointIndex].negRestitutionVelocities );
-		}
-		bool haveRestitution = b3AllZeroW( anyRestitution ) == false;
+		bool haveRestitution = b3AllZeroW( c->anyRestitution ) == false;
 		b3FloatW keepRestitution = b3ZeroW();
 
 		b3Vec3W dp = b3SubVW( bB.dp, bA.dp );
@@ -1955,11 +1959,14 @@ void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 
 		if ( haveRestitution )
 		{
+			b3FloatW anyRestitution = b3ZeroW();
 			for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
 			{
 				b3ContactConstraintPointWide* cp = c->points + pointIndex;
 				cp->negRestitutionVelocities = b3BlendW( b3ZeroW(), cp->negRestitutionVelocities, keepRestitution );
+				anyRestitution = b3OrW( anyRestitution, cp->negRestitutionVelocities );
 			}
+			c->anyRestitution = anyRestitution;
 		}
 
 		// Rolling resistance
