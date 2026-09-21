@@ -714,6 +714,7 @@ static void b3CollideTask( int startIndex, int endIndex, int workerIndex, void* 
 							b3Vec3 rB = b3MulMV( matrixB, mp->anchorB );
 							b3Vec3 dp = b3Add( dc, b3Sub( rB, rA ) );
 							mp->separation = mp->baseSeparation + b3Dot( dp, normal );
+							mp->normalVelocity = 0.0f;
 							mp->persisted = true;
 						}
 					}

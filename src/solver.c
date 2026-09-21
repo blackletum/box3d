@@ -1584,15 +1584,6 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 
 					int colorContactCountW = ( ( colorConvexContactCount - 1 ) >> B3_SIMD_SHIFT ) + 1;
 					color->wideConstraintCount = colorContactCountW;
-
-					// Zero remainder lanes in the tail wide slot so prepare workers don't need to
-					// initialize them.
-					if ( ( colorConvexContactCount & ( B3_SIMD_WIDTH - 1 ) ) != 0 )
-					{
-						memset( (uint8_t*)color->wideConstraints + ( colorContactCountW - 1 ) * wideContactByteCount, 0,
-								wideContactByteCount );
-					}
-
 					wideBase += colorContactCountW;
 				}
 

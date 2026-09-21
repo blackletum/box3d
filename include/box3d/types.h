@@ -2645,9 +2645,6 @@ typedef struct b3ManifoldPoint
 	/// The separation of the contact point, negative if penetrating
 	float separation;
 
-	/// Cached separation used for contact recycling
-	float baseSeparation;
-
 	/// The impulse along the manifold normal vector. Since Box3D uses sub-stepping, this is
 	/// result from the final sub-step.
 	float normalImpulse;
@@ -2661,6 +2658,9 @@ typedef struct b3ManifoldPoint
 	/// Relative normal velocity pre-solve. Negative when approaching. This is only
 	/// computed if hit events are enabled.
 	float normalVelocity;
+
+	/// Cached separation used for contact recycling
+	float baseSeparation;
 
 	/// Local point for matching
 	/// Uniquely identifies a contact point between two shapes
