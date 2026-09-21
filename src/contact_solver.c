@@ -876,6 +876,11 @@ typedef struct b3SymMatrix3W
 	b3FloatW cxx, cxy, cxz, cyy, cyz, czz;
 } b3SymMatrix3W;
 
+typedef struct b3Matrix3W
+{
+	b3Vec3W cx, cy, cz;
+} b3Matrix3W;
+
 // s * a
 static inline b3Vec3W b3MulSVW( b3FloatW s, b3Vec3W a )
 {
@@ -984,19 +989,43 @@ static inline b3Vec3W b3CrossW( b3Vec3W a, b3Vec3W b )
 	return c;
 }
 
-static inline b3Vec3W b3RotateVectorW( b3QuatW q, b3Vec3W a )
+static inline b3Matrix3W b3MakeMatrixFromQuatW( b3QuatW q )
 {
-	b3Vec3W t1 = b3CrossW( q.V, a );
-	b3Vec3W t2;
-	t2.X = b3MulAddW( t1.X, q.S, a.X );
-	t2.Y = b3MulAddW( t1.Y, q.S, a.Y );
-	t2.Z = b3MulAddW( t1.Z, q.S, a.Z );
-	b3Vec3W t3 = b3CrossW( q.V, t2 );
-	b3FloatW two = b3SplatW( 2.0f );
-	b3Vec3W b;
-	b.X = b3MulAddW( a.X, two, t3.X );
-	b.Y = b3MulAddW( a.Y, two, t3.Y );
-	b.Z = b3MulAddW( a.Z, two, t3.Z );
+	b3FloatW x2 = b3AddW( q.V.X, q.V.X );
+	b3FloatW y2 = b3AddW( q.V.Y, q.V.Y );
+	b3FloatW z2 = b3AddW( q.V.Z, q.V.Z );
+	b3FloatW xx2 = b3MulW( q.V.X, x2 );
+	b3FloatW yy2 = b3MulW( q.V.Y, y2 );
+	b3FloatW zz2 = b3MulW( q.V.Z, z2 );
+	b3FloatW xy2 = b3MulW( q.V.X, y2 );
+	b3FloatW xz2 = b3MulW( q.V.X, z2 );
+	b3FloatW yz2 = b3MulW( q.V.Y, z2 );
+	b3FloatW xw2 = b3MulW( q.S, x2 );
+	b3FloatW yw2 = b3MulW( q.S, y2 );
+	b3FloatW zw2 = b3MulW( q.S, z2 );
+	b3FloatW one = b3SplatW( 1.0f );
+
+	b3Matrix3W m;
+	m.cx.X = b3SubW( one, b3AddW( yy2, zz2 ) );
+	m.cx.Y = b3AddW( xy2, zw2 );
+	m.cx.Z = b3SubW( xz2, yw2 );
+	m.cy.X = b3SubW( xy2, zw2 );
+	m.cy.Y = b3SubW( one, b3AddW( xx2, zz2 ) );
+	m.cy.Z = b3AddW( yz2, xw2 );
+	m.cz.X = b3AddW( xz2, yw2 );
+	m.cz.Y = b3SubW( yz2, xw2 );
+	m.cz.Z = b3SubW( one, b3AddW( xx2, yy2 ) );
+	return m;
+}
+
+static inline b3Vec3W b3MulM3VW( b3Matrix3W m, b3Vec3W a )
+{
+	b3Vec3W b = {
+		b3AddW( b3MulW( m.cx.X, a.X ), b3AddW( b3MulW( m.cy.X, a.Y ), b3MulW( m.cz.X, a.Z ) ) ),
+		b3AddW( b3MulW( m.cx.Y, a.X ), b3AddW( b3MulW( m.cy.Y, a.Y ), b3MulW( m.cz.Y, a.Z ) ) ),
+		b3AddW( b3MulW( m.cx.Z, a.X ), b3AddW( b3MulW( m.cy.Z, a.Y ), b3MulW( m.cz.Z, a.Z ) ) ),
+	};
+
 	return b;
 }
 
@@ -1783,6 +1812,8 @@ void b3PushContacts_Convex( b3SolverBlock block, b3StepContext* context )
 		b3FloatW impulseScale = b3BlendW( dynamicImpulseScale, staticImpulseScale, softMask );
 
 		b3Vec3W dp = b3SubVW( bB.dp, bA.dp );
+		b3Matrix3W dqA = b3MakeMatrixFromQuatW( bA.dq );
+		b3Matrix3W dqB = b3MakeMatrixFromQuatW( bB.dq );
 
 		for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
 		{
@@ -1793,9 +1824,8 @@ void b3PushContacts_Convex( b3SolverBlock block, b3StepContext* context )
 			b3Vec3W rB = cp->anchorBs;
 
 			// Moving anchors for current separation
-			// todo speed this up using matrices
-			b3Vec3W rsA = b3RotateVectorW( bA.dq, rA );
-			b3Vec3W rsB = b3RotateVectorW( bB.dq, rB );
+			b3Vec3W rsA = b3MulM3VW( dqA, rA );
+			b3Vec3W rsB = b3MulM3VW( dqB, rB );
 
 			// compute current separation
 			// this is subject to round-off error if the anchor is far from the body center of mass
@@ -1873,6 +1903,8 @@ void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 		b3FloatW keepRestitution = b3ZeroW();
 
 		b3Vec3W dp = b3SubVW( bB.dp, bA.dp );
+		b3Matrix3W dqA = b3MakeMatrixFromQuatW( bA.dq );
+		b3Matrix3W dqB = b3MakeMatrixFromQuatW( bB.dq );
 
 		b3FloatW totalNormalImpulse = b3ZeroW();
 		b3FloatW totalTwistLimit = b3ZeroW();
@@ -1898,9 +1930,8 @@ void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 				if ( iteration == 0 )
 				{
 					// Moving anchors for current separation
-					// todo speed this up using matrices
-					b3Vec3W rsA = b3RotateVectorW( bA.dq, rA );
-					b3Vec3W rsB = b3RotateVectorW( bB.dq, rB );
+					b3Vec3W rsA = b3MulM3VW( dqA, rA );
+					b3Vec3W rsB = b3MulM3VW( dqB, rB );
 
 					// compute current separation
 					// this is subject to round-off error if the anchor is far from the body center of mass
