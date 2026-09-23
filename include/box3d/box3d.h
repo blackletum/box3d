@@ -243,9 +243,6 @@ B3_API void b3World_DumpMemoryStats( b3WorldId worldId );
 B3_API void b3World_DumpShapeBounds( b3WorldId worldId, b3BodyType type );
 
 /// This is for internal testing
-B3_API void b3World_RebuildStaticTree( b3WorldId worldId );
-
-/// This is for internal testing
 B3_API void b3World_EnableSpeculative( b3WorldId worldId, bool flag );
 
 /**
