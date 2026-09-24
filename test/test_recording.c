@@ -1028,8 +1028,7 @@ static float ReplaySafetyFactor( b3RecPlayer* player, const char* name )
 }
 
 // Exercise every recorded op in a single session, then validate replay at two worker
-// counts, round-trip through a file, and drive the incremental player. Mirrors the
-// comprehensive RecordingTest in Box2D's test suite (box2d/test/test_recording.c).
+// counts, round-trip through a file, and drive the incremental player.
 static int AllOps( void )
 {
 	b3Recording* rec = b3CreateRecording( 0 );
@@ -1440,6 +1439,8 @@ static int AllOps( void )
 	b3World_EnableWarmStarting( worldId, true );
 	b3World_EnableSpeculative( worldId, true );
 	b3World_SetRestitutionThreshold( worldId, 1.5f );
+	b3World_SetRestitutionIterations( worldId, 2 );
+	b3World_EnableRestitutionPropagation( worldId, true );
 	b3World_SetHitEventThreshold( worldId, 2.0f );
 	b3World_SetContactTuning( worldId, 30.0f, 10.0f, 3.0f );
 	b3World_SetContactRecycleDistance( worldId, 0.05f );

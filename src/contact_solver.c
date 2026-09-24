@@ -35,9 +35,8 @@ void b3PrepareContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 	b3BodySim* bodySims = context->sims;
 	b3BodyState* states = context->states;
 
-	float negRestitutionThreshold = -world->restitutionThreshold;
-
 	float warmStartScale = world->enableWarmStarting ? 1.0f : 0.0f;
+	bool anyRestitution = false;
 
 	// Used for friction center weighting.
 	float invTau = 1.0f / B3_SPECULATIVE_DISTANCE;
@@ -141,12 +140,14 @@ void b3PrepareContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 			contactConstraint->softness =
 				( contact->flags & b3_contactStaticFlag ) != 0 ? context->staticSoftness : context->contactSoftness;
 			contactConstraint->friction = contact->friction;
+			contactConstraint->restitution = contact->restitution;
 			contactConstraint->rollingResistance = contact->rollingResistance;
 
 			// Only sample contact point normal velocity if needed.
-			float restitution = contact->restitution;
+			bool haveRestitution = contact->restitution > 0.0f;
 			bool hitEvents = ( contact->flags & b3_simEnableHitEvent ) != 0;
-			bool sampleVelocity = restitution > 0.0f || hitEvents;
+			bool sampleVelocity = haveRestitution || hitEvents;
+			anyRestitution = anyRestitution || haveRestitution;
 
 			b3Vec3 vA = b3Vec3_zero;
 			b3Vec3 wA = b3Vec3_zero;
@@ -206,6 +207,7 @@ void b3PrepareContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 					cp->baseSeparation = s - b3Dot( b3Sub( cp->rB, cp->rA ), normal );
 					cp->normalImpulse = warmStartScale * mp->normalImpulse;
 					cp->totalNormalImpulse = 0.0f;
+					cp->restitutionImpulse = 0.0f;
 
 					b3Vec3 rA = cp->rA;
 					b3Vec3 rB = cp->rB;
@@ -222,12 +224,12 @@ void b3PrepareContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 						b3Vec3 vrB = b3Add( vB, b3Cross( wB, rB ) );
 						float vn = b3Dot( normal, b3Sub( vrB, vrA ) );
 
-						cp->restitutionVelocity = vn < negRestitutionThreshold ? -restitution * vn : 0.0f;
+						cp->relativeVelocity = vn;
 						mp->normalVelocity = hitEvents ? vn : 0.0f;
 					}
 					else
 					{
-						cp->restitutionVelocity = 0.0f;
+						cp->relativeVelocity = 0.0f;
 						mp->normalVelocity = 0.0f;
 					}
 
@@ -284,6 +286,11 @@ void b3PrepareContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 
 		// Advance to next color
 		colorIndex += 1;
+	}
+
+	if ( anyRestitution )
+	{
+		b3AtomicStoreInt( &context->anyRestitution, 1 );
 	}
 
 	b3TracyCZoneEnd( prepare_contact );
@@ -507,7 +514,7 @@ void b3PushContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 	}
 }
 
-// Solve contacts: normal, friction, rolling resistance, and restitution.
+// Solve contacts: normal, friction and rolling resistance.
 void b3SolveContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 {
 	b3World* world = context->world;
@@ -560,95 +567,46 @@ void b3SolveContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 
 			float totalNormalImpulse = 0.0f;
 			float totalTwistLimit = 0.0f;
-			bool stopRestitution = true;
 
-			// Restitution with more than one point requires iteration to reduce spin.
-			int iterationCount = 1;
 			for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
 			{
-				if ( constraint->points[pointIndex].restitutionVelocity > 0.0f )
-				{
-					iterationCount = pointCount;
-					break;
-				}
-			}
+				b3ManifoldConstraintPoint* cp = constraint->points + pointIndex;
 
-			float velocityBiases[B3_MAX_MANIFOLD_POINTS];
+				// Fixed anchor points for applying impulses
+				b3Vec3 rA = cp->rA;
+				b3Vec3 rB = cp->rB;
 
-			for ( int iteration = 0; iteration < iterationCount; ++iteration )
-			{
-				bool accumulate = iteration + 1 == iterationCount;
+				// compute current separation
+				// this is subject to round-off error if the anchor is far from the body center of mass
+				b3Vec3 ds = b3Add( dp, b3Sub( b3RotateVector( dqB, rB ), b3RotateVector( dqA, rA ) ) );
+				float s = b3Dot( ds, normal ) + cp->baseSeparation;
 
-				for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
-				{
-					b3ManifoldConstraintPoint* cp = constraint->points + pointIndex;
+				// speculative bias, zero when overlapped
+				float velocityBias = s > 0.0f ? s * inv_h : 0.0f;
 
-					// Fixed anchor points for applying impulses
-					b3Vec3 rA = cp->rA;
-					b3Vec3 rB = cp->rB;
+				// relative normal velocity at contact
+				b3Vec3 vrA = b3Add( vA, b3Cross( wA, rA ) );
+				b3Vec3 vrB = b3Add( vB, b3Cross( wB, rB ) );
+				float vn = b3Dot( b3Sub( vrB, vrA ), normal );
 
-					float velocityBias;
-					if ( iteration == 0 )
-					{
-						// compute current separation
-						// this is subject to round-off error if the anchor is far from the body center of mass
-						b3Vec3 ds = b3Add( dp, b3Sub( b3RotateVector( dqB, rB ), b3RotateVector( dqA, rA ) ) );
-						float s = b3Dot( ds, normal ) + cp->baseSeparation;
+				// incremental normal impulse
+				float deltaImpulse = -cp->normalMass * ( vn + velocityBias );
 
-						// speculative bias, zero when overlapped
-						velocityBias = s > 0.0f ? s * inv_h : 0.0f;
+				// clamp the accumulated impulse
+				float newImpulse = b3MaxFloat( cp->normalImpulse + deltaImpulse, 0.0f );
+				deltaImpulse = newImpulse - cp->normalImpulse;
+				cp->normalImpulse = newImpulse;
+				cp->totalNormalImpulse += newImpulse;
+				totalNormalImpulse += newImpulse;
+				totalTwistLimit += cp->leverArm * newImpulse;
 
-						// Apply restitution.
-						if ( cp->restitutionVelocity > 0.0f )
-						{
-							velocityBias = b3MinFloat( velocityBias, -cp->restitutionVelocity );
-							stopRestitution = stopRestitution && s > 0.0f;
-						}
+				// apply normal impulse
+				b3Vec3 P = b3MulSV( deltaImpulse, normal );
+				vA = b3MulSub( vA, mA, P );
+				wA = b3Sub( wA, b3MulMV( iA, b3Cross( rA, P ) ) );
 
-						velocityBiases[pointIndex] = velocityBias;
-					}
-					else
-					{
-						velocityBias = velocityBiases[pointIndex];
-					}
-
-					// relative normal velocity at contact
-					b3Vec3 vrA = b3Add( vA, b3Cross( wA, rA ) );
-					b3Vec3 vrB = b3Add( vB, b3Cross( wB, rB ) );
-					float vn = b3Dot( b3Sub( vrB, vrA ), normal );
-
-					// incremental normal impulse
-					float deltaImpulse = -cp->normalMass * ( vn + velocityBias );
-
-					// clamp the accumulated impulse
-					float newImpulse = b3MaxFloat( cp->normalImpulse + deltaImpulse, 0.0f );
-					deltaImpulse = newImpulse - cp->normalImpulse;
-					cp->normalImpulse = newImpulse;
-
-					if ( accumulate )
-					{
-						cp->totalNormalImpulse += newImpulse;
-						totalNormalImpulse += newImpulse;
-						totalTwistLimit += cp->leverArm * cp->normalImpulse;
-					}
-
-					// apply normal impulse
-					b3Vec3 P = b3MulSV( deltaImpulse, normal );
-					vA = b3MulSub( vA, mA, P );
-					wA = b3Sub( wA, b3MulMV( iA, b3Cross( rA, P ) ) );
-
-					vB = b3MulAdd( vB, mB, P );
-					wB = b3Add( wB, b3MulMV( iB, b3Cross( rB, P ) ) );
-				}
-			}
-
-			// Stop restitution once all bouncing points are separated.
-			if ( stopRestitution )
-			{
-				for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
-				{
-					constraint->points[pointIndex].restitutionVelocity = 0.0f;
-				}
+				vB = b3MulAdd( vB, mB, P );
+				wB = b3Add( wB, b3MulMV( iB, b3Cross( rB, P ) ) );
 			}
 
 			// Central twist friction
@@ -744,6 +702,133 @@ void b3SolveContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 			stateB->angularVelocity = wB;
 		}
 	}
+}
+
+void b3ApplyRestitution_Mesh( b3SolverBlock block, b3StepContext* context )
+{
+	b3TracyCZoneNC( restitution_mesh, "Restitution Mesh", b3_colorViolet, true );
+
+	b3World* world = context->world;
+	b3GraphColor* color = world->constraintGraph.colors + block.colorIndex;
+	b3ContactConstraint* contactConstraints = color->contactConstraints;
+	b3BodyState* states = context->states;
+
+	float threshold = world->restitutionThreshold;
+	float inv_h = context->inv_h;
+	bool propagate = world->enableRestitutionPropagation;
+
+	b3BodyState dummyState = b3_identityBodyState;
+
+	int startIndex = block.startIndex;
+	int endIndex = startIndex + block.count;
+
+	for ( int i = startIndex; i < endIndex; ++i )
+	{
+		b3ContactConstraint* contactConstraint = contactConstraints + i;
+		float restitution = contactConstraint->restitution;
+		if ( propagate == false && restitution == 0.0f )
+		{
+			continue;
+		}
+
+		int manifoldCount = contactConstraint->manifoldCount;
+
+		int indexA = contactConstraint->indexA;
+		int indexB = contactConstraint->indexB;
+
+		float mA = contactConstraint->invMassA;
+		b3Matrix3 iA = contactConstraint->invIA;
+		float mB = contactConstraint->invMassB;
+		b3Matrix3 iB = contactConstraint->invIB;
+
+		b3BodyState* stateA = indexA == B3_NULL_INDEX ? &dummyState : states + indexA;
+		b3Vec3 vA = stateA->linearVelocity;
+		b3Vec3 wA = stateA->angularVelocity;
+		b3Quat dqA = stateA->deltaRotation;
+
+		b3BodyState* stateB = indexB == B3_NULL_INDEX ? &dummyState : states + indexB;
+		b3Vec3 vB = stateB->linearVelocity;
+		b3Vec3 wB = stateB->angularVelocity;
+		b3Quat dqB = stateB->deltaRotation;
+
+		b3Vec3 dp = b3Sub( stateB->deltaPosition, stateA->deltaPosition );
+
+		for ( int j = 0; j < manifoldCount; ++j )
+		{
+			b3ManifoldConstraint* constraint = contactConstraint->constraints + j;
+
+			int pointCount = constraint->pointCount;
+			b3Vec3 normal = constraint->normal;
+
+			for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
+			{
+				b3ManifoldConstraintPoint* cp = constraint->points + pointIndex;
+
+				b3Vec3 rA = cp->rA;
+				b3Vec3 rB = cp->rB;
+
+				// The total normal impulse is 0 for speculative points.
+				float compressionImpulse = cp->totalNormalImpulse - cp->restitutionImpulse;
+				bool armed = restitution > 0.0f && cp->relativeVelocity < -threshold && compressionImpulse > 0.0f;
+
+				float velocityBias;
+				if ( armed )
+				{
+					velocityBias = restitution * cp->relativeVelocity;
+				}
+				else
+				{
+					b3Vec3 ds = b3Add( dp, b3Sub( b3RotateVector( dqB, rB ), b3RotateVector( dqA, rA ) ) );
+					float s = b3Dot( ds, normal ) + cp->baseSeparation;
+
+					velocityBias = s > 0.0f ? s * inv_h : 0.0f;
+				}
+
+				b3Vec3 vrA = b3Add( vA, b3Cross( wA, rA ) );
+				b3Vec3 vrB = b3Add( vB, b3Cross( wB, rB ) );
+				float vn = b3Dot( b3Sub( vrB, vrA ), normal );
+
+				float impulse = -cp->normalMass * ( vn + velocityBias );
+
+				float newImpulse = b3MaxFloat( cp->normalImpulse + impulse, 0.0f );
+				impulse = newImpulse - cp->normalImpulse;
+
+				float approachImpulse = b3MinFloat( b3MaxFloat( -cp->normalMass * vn, 0.0f ), b3MaxFloat( impulse, 0.0f ) );
+
+				if ( armed )
+				{
+					// Poisson kinetic restitution guarantees no energy gain.
+					float allowance = restitution * ( compressionImpulse + approachImpulse ) - cp->restitutionImpulse;
+					impulse = b3MinFloat( impulse, approachImpulse + b3MaxFloat( allowance, 0.0f ) );
+				}
+
+				cp->normalImpulse += impulse;
+				cp->restitutionImpulse += impulse - approachImpulse;
+				cp->totalNormalImpulse += impulse;
+
+				b3Vec3 P = b3MulSV( impulse, normal );
+				vA = b3MulSub( vA, mA, P );
+				wA = b3Sub( wA, b3MulMV( iA, b3Cross( rA, P ) ) );
+
+				vB = b3MulAdd( vB, mB, P );
+				wB = b3Add( wB, b3MulMV( iB, b3Cross( rB, P ) ) );
+			}
+		}
+
+		if ( stateA->flags & b3_dynamicFlag )
+		{
+			stateA->linearVelocity = vA;
+			stateA->angularVelocity = wA;
+		}
+
+		if ( stateB->flags & b3_dynamicFlag )
+		{
+			stateB->linearVelocity = vB;
+			stateB->angularVelocity = wB;
+		}
+	}
+
+	b3TracyCZoneEnd( restitution_mesh );
 }
 
 // Don't need to use spans for colors for this because the constraint to contact association
@@ -1042,7 +1127,8 @@ typedef struct b3ContactConstraintPointWide
 	b3FloatW totalNormalImpulses;
 	b3FloatW normalMasses;
 	b3FloatW leverArms;
-	b3FloatW negRestitutionVelocities;
+	b3FloatW relativeVelocities;
+	b3FloatW restitutionImpulses;
 } b3ContactConstraintPointWide;
 
 // Solves four points
@@ -1074,7 +1160,7 @@ typedef struct b3ContactConstraintWide
 	b3FloatW rollingResistance;
 	b3FloatW tangentVelocity1;
 	b3FloatW tangentVelocity2;
-	b3FloatW anyRestitution;
+	b3FloatW restitution;
 
 	b3Manifold* manifolds[B3_SIMD_WIDTH];
 
@@ -1343,8 +1429,8 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 	b3FloatW warmStartScale = world->enableWarmStarting ? oneW : zeroW;
 	b3FloatW invTau = b3SplatW( 1.0f / B3_SPECULATIVE_DISTANCE );
 	b3FloatW minFrictionWeight = b3SplatW( B3_MIN_FRICTION_WEIGHT );
-	b3FloatW negRestitutionThreshold = b3SplatW( -world->restitutionThreshold );
 	b3FloatW minDet = b3SplatW( 1000.0f * FLT_MIN );
+	bool anyRestitution = false;
 
 	int wideIndex = block.startIndex;
 	int endWideIndex = block.startIndex + block.count;
@@ -1430,11 +1516,10 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 			c->invIA = iA;
 			c->invIB = iB;
 
-			b3FloatW restitution;
 			b3Vec3W tangentVelocity;
 			B3_GATHER_LANES( c->friction, contactLanes, friction );
 			B3_GATHER_LANES( c->rollingResistance, contactLanes, rollingResistance );
-			B3_GATHER_LANES( restitution, contactLanes, restitution );
+			B3_GATHER_LANES( c->restitution, contactLanes, restitution );
 			B3_GATHER_LANES( tangentVelocity.X, contactLanes, tangentVelocity.x );
 			B3_GATHER_LANES( tangentVelocity.Y, contactLanes, tangentVelocity.y );
 			B3_GATHER_LANES( tangentVelocity.Z, contactLanes, tangentVelocity.z );
@@ -1515,7 +1600,8 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 				cp->baseSeparations = b3SubW( separation, b3DotW( b3SubVW( rB, rA ), normal ) );
 				cp->normalImpulses = b3MulW( warmStartScale, normalImpulse );
 				cp->totalNormalImpulses = zeroW;
-				cp->negRestitutionVelocities = zeroW;
+				cp->relativeVelocities = zeroW;
+				cp->restitutionImpulses = zeroW;
 
 				b3Vec3W rnA = b3CrossW( rA, normal );
 				b3Vec3W rnB = b3CrossW( rB, normal );
@@ -1580,9 +1666,10 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 			}
 
 			// Only sample contact point normal velocity if needed.
-			b3FloatW restitutionMask = b3GreaterThanW( restitution, zeroW );
-			b3FloatW anyRestitution = zeroW;
-			if ( hitEventLanes != 0 || b3AnyTrueW( restitutionMask ) )
+			bool haveRestitution = b3AnyTrueW( b3GreaterThanW( c->restitution, zeroW ) );
+			anyRestitution = anyRestitution || haveRestitution;
+
+			if ( hitEventLanes != 0 || haveRestitution )
 			{
 				b3BodyStateW bA = b3GatherBodies( states, c->indexA );
 				b3BodyStateW bB = b3GatherBodies( states, c->indexB );
@@ -1590,15 +1677,11 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 				for ( int pointIndex = 0; pointIndex < B3_MAX_MANIFOLD_POINTS; ++pointIndex )
 				{
 					b3ContactConstraintPointWide* cp = c->points + pointIndex;
-					b3FloatW pointMask = b3GreaterThanW( pointCountW, b3SplatW( (float)pointIndex ) );
 
 					b3Vec3W vrA = b3AddVW( bA.v, b3CrossW( bA.w, cp->anchorAs ) );
 					b3Vec3W vrB = b3AddVW( bB.v, b3CrossW( bB.w, cp->anchorBs ) );
 					b3FloatW vn = b3DotW( normal, b3SubVW( vrB, vrA ) );
-
-					b3FloatW bounce = b3AndW( b3AndW( b3LessThanW( vn, negRestitutionThreshold ), restitutionMask ), pointMask );
-					cp->negRestitutionVelocities = b3BlendW( zeroW, b3MulW( restitution, vn ), bounce );
-					anyRestitution = b3OrW( anyRestitution, cp->negRestitutionVelocities );
+					cp->relativeVelocities = vn;
 
 					if ( hitEventLanes != 0 )
 					{
@@ -1615,12 +1698,15 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 					}
 				}
 			}
-
-			c->anyRestitution = anyRestitution;
 		}
 
 		// Advance to next color
 		colorIndex += 1;
+	}
+
+	if ( anyRestitution )
+	{
+		b3AtomicStoreInt( &context->anyRestitution, 1 );
 	}
 
 	b3TracyCZoneEnd( prepare_contact );
@@ -1800,8 +1886,7 @@ void b3PushContacts_Convex( b3SolverBlock block, b3StepContext* context )
 	b3TracyCZoneEnd( push_contact );
 }
 
-// Solve the normal constraint, friction, and rolling resistance. Deferred restitution augments
-// the normal constraint.
+// Solve the normal constraint, friction, and rolling resistance.
 void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 {
 	b3TracyCZoneNC( solve_contact, "Solve Contact", b3_colorAliceBlue, true );
@@ -1825,9 +1910,6 @@ void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 		b3BodyStateW bA = b3GatherBodies( states, c->indexA );
 		b3BodyStateW bB = b3GatherBodies( states, c->indexB );
 
-		bool haveRestitution = b3AllZeroW( c->anyRestitution ) == false;
-		b3FloatW keepRestitution = b3ZeroW();
-
 		b3Vec3W dp = b3SubVW( bB.dp, bA.dp );
 		b3Matrix3W dqA = b3MakeMatrixFromQuatW( bA.dq );
 		b3Matrix3W dqB = b3MakeMatrixFromQuatW( bB.dq );
@@ -1835,95 +1917,48 @@ void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 		b3FloatW totalNormalImpulse = b3ZeroW();
 		b3FloatW totalTwistLimit = b3ZeroW();
 
-		// Restitution with more than one point needs iteration to reduce spin.
-		// This makes restitution have a significant cost.
-		int iterationCount = haveRestitution ? pointCount : 1;
-		b3FloatW velocityBiases[B3_MAX_MANIFOLD_POINTS];
-
-		for ( int iteration = 0; iteration < iterationCount; ++iteration )
+		for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
 		{
-			bool accumulate = iteration + 1 == iterationCount;
+			b3ContactConstraintPointWide* cp = c->points + pointIndex;
 
-			for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
-			{
-				b3ContactConstraintPointWide* cp = c->points + pointIndex;
+			// Fixed anchor points for applying impulses
+			b3Vec3W rA = cp->anchorAs;
+			b3Vec3W rB = cp->anchorBs;
 
-				// Fixed anchor points for applying impulses
-				b3Vec3W rA = cp->anchorAs;
-				b3Vec3W rB = cp->anchorBs;
+			// Moving anchors for current separation
+			b3Vec3W rsA = b3MulM3VW( dqA, rA );
+			b3Vec3W rsB = b3MulM3VW( dqB, rB );
 
-				b3FloatW velocityBias;
-				if ( iteration == 0 )
-				{
-					// Moving anchors for current separation
-					b3Vec3W rsA = b3MulM3VW( dqA, rA );
-					b3Vec3W rsB = b3MulM3VW( dqB, rB );
+			// compute current separation
+			// this is subject to round-off error if the anchor is far from the body center of mass
+			b3Vec3W ds = b3AddVW( dp, b3SubVW( rsB, rsA ) );
+			b3FloatW s = b3AddW( b3DotW( c->normal, ds ), cp->baseSeparations );
 
-					// compute current separation
-					// this is subject to round-off error if the anchor is far from the body center of mass
-					b3Vec3W ds = b3AddVW( dp, b3SubVW( rsB, rsA ) );
-					b3FloatW s = b3AddW( b3DotW( c->normal, ds ), cp->baseSeparations );
+			// Speculative bias, positive if separated and zero if overlapped
+			b3FloatW velocityBias = b3MaxW( b3ZeroW(), b3MulW( s, inv_h ) );
 
-					// Speculative bias, positive if separated and zero if overlapped
-					velocityBias = b3MaxW( b3ZeroW(), b3MulW( s, inv_h ) );
+			// Relative velocity at contact
+			b3Vec3W vrA = b3AddVW( bA.v, b3CrossW( bA.w, rA ) );
+			b3Vec3W vrB = b3AddVW( bB.v, b3CrossW( bB.w, rB ) );
+			b3FloatW vn = b3DotW( b3SubVW( vrB, vrA ), c->normal );
 
-					if ( haveRestitution )
-					{
-						// A lane with no restitution keeps the speculative bias. A bouncing lane stops
-						// bouncing once every point on its manifold has separated.
-						b3FloatW restitutionMask = b3GreaterThanW( b3ZeroW(), cp->negRestitutionVelocities );
-						b3FloatW separated = b3GreaterThanW( s, b3ZeroW() );
-						velocityBias = b3BlendW( velocityBias, cp->negRestitutionVelocities, restitutionMask );
-						keepRestitution = b3OrW( keepRestitution, b3AndNotW( restitutionMask, separated ) );
-					}
+			// Compute normal impulse
+			b3FloatW negImpulse = b3MulW( cp->normalMasses, b3AddW( vn, velocityBias ) );
 
-					velocityBiases[pointIndex] = velocityBias;
-				}
-				else
-				{
-					velocityBias = velocityBiases[pointIndex];
-				}
+			// Clamp the accumulated impulse
+			b3FloatW newImpulse = b3MaxW( b3SubW( cp->normalImpulses, negImpulse ), b3ZeroW() );
+			b3FloatW deltaImpulse = b3SubW( newImpulse, cp->normalImpulses );
+			cp->normalImpulses = newImpulse;
+			cp->totalNormalImpulses = b3AddW( cp->totalNormalImpulses, newImpulse );
+			totalNormalImpulse = b3AddW( totalNormalImpulse, newImpulse );
+			totalTwistLimit = b3AddW( totalTwistLimit, b3MulW( cp->leverArms, newImpulse ) );
 
-				// Relative velocity at contact
-				b3Vec3W vrA = b3AddVW( bA.v, b3CrossW( bA.w, rA ) );
-				b3Vec3W vrB = b3AddVW( bB.v, b3CrossW( bB.w, rB ) );
-				b3FloatW vn = b3DotW( b3SubVW( vrB, vrA ), c->normal );
-
-				// Compute normal impulse
-				b3FloatW negImpulse = b3MulW( cp->normalMasses, b3AddW( vn, velocityBias ) );
-
-				// Clamp the accumulated impulse
-				b3FloatW newImpulse = b3MaxW( b3SubW( cp->normalImpulses, negImpulse ), b3ZeroW() );
-				b3FloatW deltaImpulse = b3SubW( newImpulse, cp->normalImpulses );
-				cp->normalImpulses = newImpulse;
-
-				// Don't accumulate the total impulse while bouncing.
-				if ( accumulate )
-				{
-					cp->totalNormalImpulses = b3AddW( cp->totalNormalImpulses, newImpulse );
-					totalNormalImpulse = b3AddW( totalNormalImpulse, newImpulse );
-					totalTwistLimit = b3AddW( totalTwistLimit, b3MulW( cp->leverArms, newImpulse ) );
-				}
-
-				// Apply contact impulse
-				b3Vec3W P = b3MulSVW( deltaImpulse, c->normal );
-				bA.w = b3MulSubMVW( bA.w, c->invIA, b3CrossW( rA, P ) );
-				bA.v = b3MulSubSVW( bA.v, c->invMassA, P );
-				bB.w = b3MulAddMVW( bB.w, c->invIB, b3CrossW( rB, P ) );
-				bB.v = b3MulAddSVW( bB.v, c->invMassB, P );
-			}
-		}
-
-		if ( haveRestitution )
-		{
-			b3FloatW anyRestitution = b3ZeroW();
-			for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
-			{
-				b3ContactConstraintPointWide* cp = c->points + pointIndex;
-				cp->negRestitutionVelocities = b3BlendW( b3ZeroW(), cp->negRestitutionVelocities, keepRestitution );
-				anyRestitution = b3OrW( anyRestitution, cp->negRestitutionVelocities );
-			}
-			c->anyRestitution = anyRestitution;
+			// Apply contact impulse
+			b3Vec3W P = b3MulSVW( deltaImpulse, c->normal );
+			bA.w = b3MulSubMVW( bA.w, c->invIA, b3CrossW( rA, P ) );
+			bA.v = b3MulSubSVW( bA.v, c->invMassA, P );
+			bB.w = b3MulAddMVW( bB.w, c->invIB, b3CrossW( rB, P ) );
+			bB.v = b3MulAddSVW( bB.v, c->invMassB, P );
 		}
 
 		// Rolling resistance
@@ -2035,6 +2070,93 @@ void b3SolveContacts_Convex( b3SolverBlock block, b3StepContext* context )
 	}
 
 	b3TracyCZoneEnd( solve_contact );
+}
+
+void b3ApplyRestitution_Convex( b3SolverBlock block, b3StepContext* context )
+{
+	b3TracyCZoneNC( restitution, "Restitution", b3_colorDodgerBlue, true );
+
+	b3BodyState* states = context->states;
+	b3ContactConstraintWide* constraints = context->graph->colors[block.colorIndex].wideConstraints;
+	b3FloatW inv_h = b3SplatW( context->inv_h );
+	b3FloatW negRestitutionThreshold = b3SplatW( -context->world->restitutionThreshold );
+	b3FloatW zeroW = b3ZeroW();
+	bool propagate = context->world->enableRestitutionPropagation;
+
+	for ( int wideIndex = block.startIndex; wideIndex < block.startIndex + block.count; ++wideIndex )
+	{
+		b3ContactConstraintWide* c = constraints + wideIndex;
+		if ( propagate == false && b3AllZeroW( c->restitution ) )
+		{
+			continue;
+		}
+
+		_Static_assert( B3_SIMD_WIDTH == 4, "width" );
+		int pointCount1 = b3MaxInt( c->pointCounts[0], c->pointCounts[1] );
+		int pointCount2 = b3MaxInt( c->pointCounts[2], c->pointCounts[3] );
+		int pointCount = b3MaxInt( pointCount1, pointCount2 );
+		B3_VALIDATE( 0 < pointCount && pointCount <= B3_MAX_MANIFOLD_POINTS );
+
+		b3BodyStateW bA = b3GatherBodies( states, c->indexA );
+		b3BodyStateW bB = b3GatherBodies( states, c->indexB );
+
+		b3FloatW restitutionMask = b3GreaterThanW( c->restitution, zeroW );
+		b3Vec3W dp = b3SubVW( bB.dp, bA.dp );
+		b3Matrix3W dqA = b3MakeMatrixFromQuatW( bA.dq );
+		b3Matrix3W dqB = b3MakeMatrixFromQuatW( bB.dq );
+
+		for ( int pointIndex = 0; pointIndex < pointCount; ++pointIndex )
+		{
+			b3ContactConstraintPointWide* cp = c->points + pointIndex;
+
+			b3Vec3W rA = cp->anchorAs;
+			b3Vec3W rB = cp->anchorBs;
+
+			b3FloatW normalMass = propagate ? cp->normalMasses : b3BlendW( zeroW, cp->normalMasses, restitutionMask );
+
+			b3FloatW compressionImpulse = b3SubW( cp->totalNormalImpulses, cp->restitutionImpulses );
+			b3FloatW armed = b3AndW( b3AndW( restitutionMask, b3LessThanW( cp->relativeVelocities, negRestitutionThreshold ) ),
+									 b3GreaterThanW( compressionImpulse, zeroW ) );
+
+			b3Vec3W rsA = b3MulM3VW( dqA, rA );
+			b3Vec3W rsB = b3MulM3VW( dqB, rB );
+			b3Vec3W ds = b3AddVW( dp, b3SubVW( rsB, rsA ) );
+			b3FloatW s = b3AddW( b3DotW( c->normal, ds ), cp->baseSeparations );
+
+			b3FloatW specBias = b3MaxW( zeroW, b3MulW( s, inv_h ) );
+			b3FloatW velocityBias = b3BlendW( specBias, b3MulW( c->restitution, cp->relativeVelocities ), armed );
+
+			b3Vec3W vrA = b3AddVW( bA.v, b3CrossW( bA.w, rA ) );
+			b3Vec3W vrB = b3AddVW( bB.v, b3CrossW( bB.w, rB ) );
+			b3FloatW vn = b3DotW( b3SubVW( vrB, vrA ), c->normal );
+
+			b3FloatW negImpulse = b3MulW( normalMass, b3AddW( vn, velocityBias ) );
+
+			b3FloatW newImpulse = b3MaxW( b3SubW( cp->normalImpulses, negImpulse ), zeroW );
+			b3FloatW impulse = b3SubW( newImpulse, cp->normalImpulses );
+
+			b3FloatW approachImpulse = b3MinW( b3MaxW( b3NegW( b3MulW( normalMass, vn ) ), zeroW ), b3MaxW( impulse, zeroW ) );
+			b3FloatW allowance =
+				b3SubW( b3MulW( c->restitution, b3AddW( compressionImpulse, approachImpulse ) ), cp->restitutionImpulses );
+			b3FloatW maxImpulse = b3AddW( approachImpulse, b3MaxW( allowance, zeroW ) );
+			impulse = b3BlendW( impulse, b3MinW( impulse, maxImpulse ), armed );
+
+			cp->normalImpulses = b3AddW( cp->normalImpulses, impulse );
+			cp->restitutionImpulses = b3AddW( cp->restitutionImpulses, b3SubW( impulse, approachImpulse ) );
+			cp->totalNormalImpulses = b3AddW( cp->totalNormalImpulses, impulse );
+
+			b3Vec3W P = b3MulSVW( impulse, c->normal );
+			bA.w = b3MulSubMVW( bA.w, c->invIA, b3CrossW( rA, P ) );
+			bA.v = b3MulSubSVW( bA.v, c->invMassA, P );
+			bB.w = b3MulAddMVW( bB.w, c->invIB, b3CrossW( rB, P ) );
+			bB.v = b3MulAddSVW( bB.v, c->invMassB, P );
+		}
+
+		b3ScatterBodies( states, c->indexA, &bA );
+		b3ScatterBodies( states, c->indexB, &bB );
+	}
+
+	b3TracyCZoneEnd( restitution );
 }
 
 // Store impulses by contact constraint
@@ -2235,6 +2357,27 @@ void b3SolveContacts_Overflow( b3StepContext* context )
 	};
 
 	b3SolveContacts_Mesh( block, context );
+}
+
+void b3ApplyRestitution_Overflow( b3StepContext* context )
+{
+	b3ConstraintGraph* graph = context->graph;
+	b3GraphColor* color = graph->colors + B3_OVERFLOW_INDEX;
+
+	uint16_t count = (uint16_t)color->contacts.count;
+	if ( count == 0 )
+	{
+		return;
+	}
+
+	b3SolverBlock block = {
+		.startIndex = 0,
+		.count = count,
+		.blockType = b3_overflowBlock,
+		.colorIndex = B3_OVERFLOW_INDEX,
+	};
+
+	b3ApplyRestitution_Mesh( block, context );
 }
 
 void b3StoreImpulses_Overflow( b3StepContext* context )

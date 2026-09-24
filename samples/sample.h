@@ -65,11 +65,13 @@ struct SampleContext
 	float homePitch = 0.0f;
 	float homeRadius = 0.0f;
 	int subStepCount = 4;
+	int restitutionIterations = 2;
 	int workerCount = 1;
 	bool transparentDynamic = false;
 	bool transparentKinematic = false;
 	bool enableWarmStarting = true;
 	bool enableContinuous = true;
+	bool enableRestitutionPropagation = false;
 	bool enableSleep = true;
 	bool pause = false;
 	int singleStep = 0;

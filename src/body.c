@@ -2217,7 +2217,7 @@ void b3Body_Disable( b3BodyId bodyId )
 			continue;
 		}
 
-		B3_ASSERT( joint->setIndex == set->setIndex || set->setIndex == b3_staticSet );
+		B3_ASSERT( joint->setIndex == set->setIndex || set->setIndex == b3_staticSet || joint->setIndex == b3_staticSet );
 
 		// Remove joint from island
 		b3UnlinkJoint( world, joint );
@@ -2314,7 +2314,7 @@ void b3Body_Enable( b3BodyId bodyId )
 
 		// Transfer joint first
 		int jointSetId;
-		if ( bodyA->setIndex == b3_staticSet && bodyB->setIndex == b3_staticSet )
+		if ( bodyA->type != b3_dynamicBody && bodyB->type != b3_dynamicBody )
 		{
 			jointSetId = b3_staticSet;
 		}

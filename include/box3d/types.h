@@ -147,6 +147,13 @@ typedef struct b3WorldDef
 	/// speed have restitution applied (will bounce).
 	float restitutionThreshold;
 
+	/// Number of iterations of the restitution solver. More iterations can lead to less box spinning.
+	/// @see B3_MAX_RESTITUTION_ITERATIONS
+	int restitutionIterations;
+
+	/// Enable full contact propagation in the restitution solver. Expensive.
+	bool enableRestitutionPropagation;
+
 	/// Hit event speed threshold, usually in m/s. Collisions above this
 	/// speed can generate hit events if the shape also enables hit events.
 	float hitEventThreshold;
@@ -553,6 +560,7 @@ typedef struct b3Profile
 	float solveImpulses;	   //
 	float integratePositions;  //
 	float relaxImpulses;	   //
+	float restitution;		   //
 	float storeImpulses;	   //
 	float splitIslands;		   //
 	float transforms;		   //

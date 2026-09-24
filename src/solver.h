@@ -76,6 +76,7 @@ typedef enum b3SolverStageType
 	b3_stageSolve,
 	b3_stageIntegratePositions,
 	b3_stageRelax,
+	b3_stageRestitution,
 	b3_stageStoreWideImpulses,
 	b3_stageStoreImpulses,
 } b3SolverStageType;
@@ -207,6 +208,8 @@ typedef struct b3StepContext
 	// Array of bullet bodies that need continuous collision handling
 	int* bulletBodies;
 	b3AtomicInt bulletBodyCount;
+
+	b3AtomicInt anyRestitution;
 
 	// Contact ids for simplified parallel-for access. Used in narrow-phase.
 	// These contacts may or may not be touching. They are associated with awake bodies.
