@@ -57,6 +57,13 @@ struct SampleContext
 	float hertz = 60.0f;
 	float recycleDistance = 0.05f;
 	float drawDistance = 100.0f; // meters, view/cull box half extent, persisted
+
+	// Camera the sample set up on creation. Home returns to it. Fitting the world bounds instead
+	// can put a scene with a large ground plate beyond the draw distance.
+	b3Pos homePivot = {};
+	float homeYaw = 0.0f;
+	float homePitch = 0.0f;
+	float homeRadius = 0.0f;
 	int subStepCount = 4;
 	int workerCount = 1;
 	bool transparentDynamic = false;
@@ -150,9 +157,9 @@ public:
 	// framing works regardless of where the cursor sits.
 	virtual b3BodyId FocusBody() const;
 
-	// Frame shortcut with nothing selected: fit the whole scene. Defaults to the live world bounds.
-	// The replay viewer overrides this to fit the recording, whose world is player-owned and separate
-	// from the empty base world.
+	// Home, and the frame shortcut with nothing selected. Defaults to the camera the sample set up on
+	// creation. The replay viewer overrides this to fit the recording, whose world is player-owned and
+	// separate from the empty base world.
 	virtual void FocusHome();
 
 	// Arm recording on the live world, snapshotting it as the seed so capture can begin at any
@@ -270,6 +277,9 @@ int RegisterReplay( const char* category, const char* name, SampleCreateFcn* fcn
 // Destroy the active sample and build the selected one. restart keeps the camera
 // by leaving the restart flag set while the new sample constructs.
 void SelectSample( SampleContext* context, int selection, bool restart );
+
+// Frame the selection, or go home when nothing is selected
+void FrameSelection( SampleContext* context );
 
 // Run the native "open replay" file picker and, on success, hand the chosen
 // file to the Replay viewer. Must be called outside the frame (the dialog spins

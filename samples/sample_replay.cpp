@@ -395,6 +395,14 @@ public:
 			m_camera->SetRenderTransform( b3GetLengthUnitsPerMeter(), m_context->viewZUp );
 			float aspect = m_camera->m_height > 0 ? (float)m_camera->m_width / (float)m_camera->m_height : 1.0f;
 			m_camera->Frame( m_info.bounds, aspect, 0.75f );
+
+			// The bounds include static geometry, and a large ground plate can push the fit past the
+			// draw distance, which culls the whole scene. Pull in so the middle of the scene still draws.
+			float maxRadius = 0.75f * m_context->drawDistance;
+			if ( m_camera->m_radius > maxRadius )
+			{
+				m_camera->SetOrbit( m_camera->m_yaw, m_camera->m_pitch, maxRadius );
+			}
 		}
 	}
 
@@ -523,7 +531,8 @@ public:
 	}
 
 	// , steps backward. Forward is the global single step on . so it works in every sample, and the
-	// step count lands in the context. Shift moves five frames, matching that key.
+	// step count lands in the context. Shift moves five frames, matching that key. Esc drops the
+	// selection.
 	void Keyboard( int key, int action, int mods ) override
 	{
 		if ( m_generating )
@@ -536,7 +545,11 @@ public:
 			return;
 		}
 
-		if ( key == KEY_COMMA )
+		if ( key == KEY_ESCAPE )
+		{
+			m_selKind = SelNone;
+		}
+		else if ( key == KEY_COMMA )
 		{
 			int back = ( mods & MOD_SHIFT ) ? 5 : 1;
 			SeekTo( b3RecPlayer_GetFrame( m_player ) - back );

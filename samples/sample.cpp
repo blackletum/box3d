@@ -538,9 +538,33 @@ b3BodyId Sample::FocusBody() const
 
 void Sample::FocusHome()
 {
-	b3AABB aabb = b3World_GetBounds( m_worldId );
-	float aspect = m_camera->m_height > 0 ? (float)m_camera->m_width / (float)m_camera->m_height : 1.0f;
-	m_camera->Frame( aabb, aspect, 0.75f );
+	m_camera->m_pivot = m_context->homePivot;
+	m_camera->SetOrbit( m_context->homeYaw, m_context->homePitch, m_context->homeRadius );
+}
+
+void FrameSelection( SampleContext* context )
+{
+	// A non-body selection such as a recorded query supplies its own bounds and takes priority over
+	// the hovered body. With nothing selected the sample decides what home is. The replay viewer fits
+	// its recording, which lives in a player-owned world rather than the base world.
+	Sample* sample = context->sample;
+	Camera& cam = context->camera;
+	float aspect = cam.m_height > 0 ? (float)cam.m_width / (float)cam.m_height : 1.0f;
+	b3AABB bounds;
+	if ( sample->FocusBounds( &bounds ) )
+	{
+		cam.Frame( bounds, aspect, 1.5f );
+		return;
+	}
+
+	b3BodyId bodyId = sample->FocusBody();
+	if ( B3_IS_NON_NULL( bodyId ) )
+	{
+		cam.Frame( b3Body_ComputeAABB( bodyId ), aspect, 1.5f );
+		return;
+	}
+
+	sample->FocusHome();
 }
 
 void Sample::ResetProfile()
@@ -1354,6 +1378,15 @@ void SelectSample( SampleContext* context, int selection, bool restart )
 	context->restart = restart;
 	context->sample = g_sampleEntries[selection].CreateFcn( context );
 
+	// A restart keeps the camera where it was, so the original starting view stays home
+	if ( restart == false )
+	{
+		context->homePivot = context->camera.m_pivot;
+		context->homeYaw = context->camera.m_yaw;
+		context->homePitch = context->camera.m_pitch;
+		context->homeRadius = context->camera.m_radius;
+	}
+
 	// A sample that knows where its content sits relative to its camera says
 	// so, and is taken at its word. The ceiling below guards a guess, not a
 	// measurement, so capping an explicit request would only hide it.
@@ -1678,11 +1711,11 @@ static void DrawMenuBar( SampleContext* context )
 			ImGui::Separator();
 			if ( ImGui::MenuItem( "Previous Sample", "[" ) )
 			{
-				SelectSample( context, b3MaxInt( 0, context->sampleIndex - 1 ), false );
+				SelectSample( context, ( context->sampleIndex + g_sampleCount - 1 ) % g_sampleCount, false );
 			}
 			if ( ImGui::MenuItem( "Next Sample", "]" ) )
 			{
-				SelectSample( context, b3MinInt( g_sampleCount - 1, context->sampleIndex + 1 ), false );
+				SelectSample( context, ( context->sampleIndex + 1 ) % g_sampleCount, false );
 			}
 			ImGui::Separator();
 			if ( ImGui::MenuItem( "Reset Profile" ) )
@@ -1694,7 +1727,7 @@ static void DrawMenuBar( SampleContext* context )
 				b3World_DumpMemoryStats( context->sample->m_worldId );
 			}
 			ImGui::Separator();
-			if ( ImGui::MenuItem( "Quit", "Esc" ) )
+			if ( ImGui::MenuItem( "Quit", "Ctrl+Q" ) )
 			{
 				sapp_request_quit();
 			}
@@ -1707,12 +1740,13 @@ static void DrawMenuBar( SampleContext* context )
 			{
 				context->showUI = false;
 			}
-			if ( ImGui::MenuItem( "Frame Camera" ) )
+			if ( ImGui::MenuItem( "Frame Selection", "F" ) )
 			{
-				b3AABB aabb = b3World_GetBounds( context->sample->m_worldId );
-				Camera& cam = context->camera;
-				float aspect = cam.m_height > 0 ? (float)cam.m_width / (float)cam.m_height : 1.0f;
-				cam.Frame( aabb, aspect, 0.75f );
+				FrameSelection( context );
+			}
+			if ( ImGui::MenuItem( "Reset Camera", "Home" ) )
+			{
+				context->sample->FocusHome();
 			}
 			ImGui::MenuItem( "Shapes", nullptr, &gd->drawShapes );
 			if ( ImGui::BeginMenu( "Transparency" ) )
@@ -1844,7 +1878,8 @@ static void DrawMenuBar( SampleContext* context )
 					DrawRow( "R", "Restart sample" );
 					DrawRow( "[  ]", "Previous / next sample" );
 					DrawRow( "Ctrl+O", "Open sample picker" );
-					DrawRow( "F", "Frame selection / world" );
+					DrawRow( "F", "Frame selection" );
+					DrawRow( "Home", "Reset camera" );
 					DrawRow( "?", "Show / hide controls" );
 					DrawRow( "Esc", "Cancel / close" );
 					DrawRow( "Ctrl+Q", "Quit" );
