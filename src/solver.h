@@ -189,7 +189,6 @@ typedef struct b3StepContext
 	b3Softness contactSoftness;
 	b3Softness staticSoftness;
 
-	float restitutionThreshold;
 	float maxLinearVelocity;
 
 	struct b3World* world;

@@ -1347,7 +1347,7 @@ _Static_assert( offsetof( b3Matrix3, cy ) == 12 && offsetof( b3Matrix3, cz ) == 
 _Static_assert( B3_SIMD_WIDTH == 4, "width" );
 
 static const b3Contact b3_zeroContact = { 0 };
-static b3Manifold b3_zeroManifold = { 0 };
+static const b3Manifold b3_zeroManifold = { 0 };
 static const b3BodySim b3_zeroBodySim = { 0 };
 
 #define B3_GATHER_LANES( wide, lanes, field ) wide = b3SetW( lanes[0]->field, lanes[1]->field, lanes[2]->field, lanes[3]->field )
@@ -1457,7 +1457,7 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 			int localWideIndex = wideIndex - colorWideStart;
 
 			const b3Contact* contactLanes[B3_SIMD_WIDTH];
-			b3Manifold* manifoldLanes[B3_SIMD_WIDTH];
+			const b3Manifold* manifoldLanes[B3_SIMD_WIDTH];
 			const b3BodySim* simLanesA[B3_SIMD_WIDTH];
 			const b3BodySim* simLanesB[B3_SIMD_WIDTH];
 			int hitEventLanes = 0;
@@ -1692,7 +1692,7 @@ void b3PrepareContacts_Convex( b3SolverBlock block, b3StepContext* context )
 						{
 							if ( ( hitEventLanes & ( 1 << lane ) ) != 0 && pointIndex < c->pointCounts[lane] )
 							{
-								manifoldLanes[lane]->points[pointIndex].normalVelocity = normalVelocities[lane];
+								c->manifolds[lane]->points[pointIndex].normalVelocity = normalVelocities[lane];
 							}
 						}
 					}
@@ -2280,6 +2280,7 @@ void b3PrepareContacts_Overflow( b3StepContext* context )
 	b3ConstraintGraph* graph = context->graph;
 	b3GraphColor* color = graph->colors + B3_OVERFLOW_INDEX;
 
+	B3_ASSERT( color->contacts.count <= UINT16_MAX );
 	uint16_t count = (uint16_t)color->contacts.count;
 	if ( count == 0 )
 	{

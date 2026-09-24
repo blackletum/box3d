@@ -1128,7 +1128,6 @@ void b3World_Step( b3WorldId worldId, float timeStep, int subStepCount )
 	context.contactSoftness = b3MakeSoft( contactHertz, world->contactDampingRatio, context.h );
 	context.staticSoftness = b3MakeSoft( 2.0f * contactHertz, 0.5f * world->contactDampingRatio, context.h );
 
-	context.restitutionThreshold = world->restitutionThreshold;
 	context.maxLinearVelocity = world->maxLinearSpeed;
 	context.enableWarmStarting = world->enableWarmStarting;
 
@@ -2090,9 +2089,15 @@ void b3World_SetRestitutionIterations( b3WorldId worldId, int iterations )
 		return;
 	}
 
+	iterations = b3ClampInt( iterations, 0, B3_MAX_RESTITUTION_ITERATIONS );
+	if ( iterations == world->restitutionIterations )
+	{
+		return;
+	}
+
 	B3_REC( world, WorldSetRestitutionIterations, worldId, iterations );
 
-	world->restitutionIterations = b3ClampInt( iterations, 0, B3_MAX_RESTITUTION_ITERATIONS );
+	world->restitutionIterations = iterations;
 }
 
 int b3World_GetRestitutionIterations( b3WorldId worldId )
@@ -2105,6 +2110,11 @@ void b3World_EnableRestitutionPropagation( b3WorldId worldId, bool flag )
 {
 	b3World* world = b3GetUnlockedWorldFromId( worldId );
 	if ( world == NULL )
+	{
+		return;
+	}
+
+	if ( flag == world->enableRestitutionPropagation )
 	{
 		return;
 	}
