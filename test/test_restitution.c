@@ -996,7 +996,7 @@ static ImpulseResult MeasureDropImpulse( float restitution, float dropHeight )
 			}
 		}
 
-		// The sim flag is the one written this step, the body flag lags a step behind
+		// Transient body flags are cleared and rewritten every step
 		b3Body* ball = b3GetBodyFullId( world, ballId );
 		b3BodySim* ballSim = b3GetBodySim( world, ball );
 		if ( ballSim->flags & b3_hadTimeOfImpact )

@@ -97,8 +97,8 @@ void b3SyncBodyFlags( b3World* world, b3Body* body )
 {
 	b3BodySim* bodySim = b3GetBodySim( world, body );
 
-	// Preserve the fast flag for contact recycling.
-	bodySim->flags = ( bodySim->flags & b3_isFast ) | ( body->flags & ~b3_bodyTransientFlags );
+	// Preserve the sim only flags: fast for contact recycling, time of impact for debug draw.
+	bodySim->flags = ( bodySim->flags & ( b3_isFast | b3_hadTimeOfImpact ) ) | ( body->flags & ~b3_bodyTransientFlags );
 
 	b3BodyState* bodyState = b3GetBodyState( world, body );
 	if ( bodyState != NULL )
