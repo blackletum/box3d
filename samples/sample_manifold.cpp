@@ -1248,6 +1248,496 @@ public:
 
 static int sampleComplexHullCulling = RegisterSample( "Manifold", "Complex Hull Culling", ComplexHullCulling::Create );
 
+// Shows that an edge pair can win the separating axis test even when the direction between the hull
+// centers peaks outside the Gauss map arc (wedge) of one of its edges. The inscribed sphere bound of such
+// an edge peaks at a face normal at the end of its arc, yet the edge axis beats the real separation of
+// those faces. So outside wedge edges can only be culled by their sphere bound, not by the face results.
+// Everything here is brute force over all faces and all edge pairs, independent of the pruning in the SAT.
+class EdgeAxisWedge : public Manifold
+{
+public:
+	struct EdgeAxis
+	{
+		b3Vec3 normal;
+		float separation;
+		int edgeA;
+		int edgeB;
+	};
+
+	// Gauss map arc of one edge in frame A, with the peak of dot(n, d) on its great circle
+	struct Arc
+	{
+		b3Vec3 u;
+		b3Vec3 v;
+		b3Vec3 peak;
+		float a;
+		float b;
+		float c;
+		float separationU;
+		float separationV;
+
+		// Angle from the peak to the nearest end of the arc, negative when the peak is on the arc
+		float outsideDegrees;
+		bool inside;
+	};
+
+	explicit EdgeAxisWedge( SampleContext* context )
+		: Manifold( context )
+	{
+		if ( m_context->restart == false )
+		{
+			m_camera->SetView( 0.0f, 15.0f, 22.0f, { -4.5f, 1.0f, 0.0f } );
+		}
+
+		m_transformA = { { 0.0f, 0.0f, 0.0f }, b3Quat_identity };
+		m_transformB = { { 0.0f, 3.6f, 0.0f }, b3Quat_identity };
+
+		m_gaussCenter = { -10.0f, 1.0f, 0.0f };
+		m_gaussRadius = 2.0f;
+		m_searchCount = 0;
+		m_searchFound = false;
+		m_hullType = e_slab;
+		m_createdHull = nullptr;
+
+		// Start with an example
+		SetHull( m_hullType );
+	}
+
+	~EdgeAxisWedge() override
+	{
+		if ( m_createdHull != nullptr )
+		{
+			b3DestroyHull( m_createdHull );
+		}
+	}
+
+	enum HullType
+	{
+		e_slab = 0,
+		e_tetrahedron,
+		e_complex,
+	};
+
+	// Both hulls are the same shape
+	void SetHull( int type )
+	{
+		if ( m_createdHull != nullptr )
+		{
+			b3DestroyHull( m_createdHull );
+			m_createdHull = nullptr;
+		}
+
+		if ( type == e_slab )
+		{
+			m_box = b3MakeBoxHull( 2.0f, 0.25f, 1.0f );
+			m_hullA = &m_box.base;
+		}
+		else if ( type == e_tetrahedron )
+		{
+			b3Vec3 points[4] = { { 1.0f, 1.0f, 1.0f }, { 1.0f, -1.0f, -1.0f }, { -1.0f, 1.0f, -1.0f }, { -1.0f, -1.0f, 1.0f } };
+			m_createdHull = b3CreateHull( points, 4, 4 );
+			m_hullA = m_createdHull;
+		}
+		else
+		{
+			m_createdHull = b3CreateComplexHull( 2.0f );
+			m_hullA = m_createdHull;
+		}
+
+		m_hullB = m_hullA;
+		m_hullType = type;
+		m_seed = 12345;
+		Search();
+	}
+
+	float RandomFloat()
+	{
+		m_seed = m_seed * 1664525u + 1013904223u;
+		return (float)( m_seed >> 8 ) / 16777216.0f;
+	}
+
+	b3Vec3 RandomDirection()
+	{
+		b3Vec3 v;
+		float lengthSquared;
+		do
+		{
+			v = { 2.0f * RandomFloat() - 1.0f, 2.0f * RandomFloat() - 1.0f, 2.0f * RandomFloat() - 1.0f };
+			lengthSquared = b3Dot( v, v );
+		}
+		while ( lengthSquared > 1.0f || lengthSquared < 0.01f );
+
+		return b3Normalize( v );
+	}
+
+	// Mirrors the Gauss map test and edge axis of the scalar path in b3ComputeSeparatingAxis, without pruning
+	static EdgeAxis FindBestEdgeAxis( const b3HullData* hullA, const b3HullData* hullB, b3Transform transformBtoA )
+	{
+		const b3HullHalfEdge* edgesA = b3GetHullEdges( hullA );
+		const b3Plane* planesA = b3GetHullPlanes( hullA );
+		const b3Vec3* pointsA = b3GetHullPoints( hullA );
+		const b3HullHalfEdge* edgesB = b3GetHullEdges( hullB );
+		const b3Plane* planesB = b3GetHullPlanes( hullB );
+		const b3Vec3* pointsB = b3GetHullPoints( hullB );
+
+		const float eps = -0.0001f;
+		float squaredTolerance = B3_PARALLEL_EDGE_TOL * B3_PARALLEL_EDGE_TOL;
+
+		EdgeAxis best = { b3Vec3_zero, -FLT_MAX, B3_NULL_INDEX, B3_NULL_INDEX };
+
+		for ( int j = 0; j < hullB->edgeCount; j += 2 )
+		{
+			// B face normals and vertices in frame A, negated
+			b3Vec3 C = b3Neg( b3RotateVector( transformBtoA.q, planesB[edgesB[j].face].normal ) );
+			b3Vec3 D = b3Neg( b3RotateVector( transformBtoA.q, planesB[edgesB[j + 1].face].normal ) );
+			b3Vec3 bv0 = b3Neg( b3TransformPoint( transformBtoA, pointsB[edgesB[j].origin] ) );
+			b3Vec3 bv1 = b3Neg( b3TransformPoint( transformBtoA, pointsB[edgesB[j + 1].origin] ) );
+			b3Vec3 DC = b3Sub( bv1, bv0 );
+
+			for ( int i = 0; i < hullA->edgeCount; i += 2 )
+			{
+				b3Vec3 n0 = planesA[edgesA[i].face].normal;
+				b3Vec3 n1 = planesA[edgesA[i + 1].face].normal;
+				b3Vec3 av0 = pointsA[edgesA[i].origin];
+				b3Vec3 edge = b3Sub( pointsA[edgesA[i + 1].origin], av0 );
+
+				float CBA = b3Dot( C, edge );
+				float DBA = b3Dot( D, edge );
+				float ADC = b3Dot( n0, DC );
+				float BDC = b3Dot( n1, DC );
+				if ( CBA * DBA >= eps || ADC * BDC >= eps || CBA * BDC >= eps )
+				{
+					continue;
+				}
+
+				if ( b3MaxFloat( CBA * CBA, DBA * DBA ) <= squaredTolerance * b3Dot( edge, edge ) )
+				{
+					continue;
+				}
+
+				float t = -CBA / ( DBA - CBA );
+				b3Vec3 normal = b3Normalize( b3MulAdd( C, t, b3Sub( D, C ) ) );
+				float separation = -b3Dot( normal, b3Add( av0, bv0 ) );
+				if ( separation > best.separation )
+				{
+					best = { normal, separation, i, j };
+				}
+			}
+		}
+
+		return best;
+	}
+
+	// The peak of dot(n, d) over the great circle through u and v, and whether it lies on the arc
+	static Arc MakeArc( b3Vec3 u, b3Vec3 v, b3Vec3 d, float separationU, float separationV )
+	{
+		Arc arc;
+		arc.u = u;
+		arc.v = v;
+		arc.a = b3Dot( u, d );
+		arc.b = b3Dot( v, d );
+		arc.c = b3Dot( u, v );
+		arc.inside = arc.a >= arc.c * arc.b && arc.b >= arc.c * arc.a;
+		arc.separationU = separationU;
+		arc.separationV = separationV;
+
+		b3Vec3 axis = b3Normalize( b3Cross( u, v ) );
+		b3Vec3 inPlane = b3MulSub( d, b3Dot( d, axis ), axis );
+		arc.peak = b3LengthSquared( inPlane ) > 1.0e-12f ? b3Normalize( inPlane ) : u;
+
+		float arcAngle = acosf( b3ClampFloat( arc.c, -1.0f, 1.0f ) );
+		float angleU = acosf( b3ClampFloat( b3Dot( u, arc.peak ), -1.0f, 1.0f ) );
+		float angleV = acosf( b3ClampFloat( b3Dot( v, arc.peak ), -1.0f, 1.0f ) );
+		float nearest = b3MinFloat( angleU, angleV ) * 180.0f / B3_PI;
+		arc.outsideDegrees = ( angleU <= arcAngle && angleV <= arcAngle ) ? -nearest : nearest;
+		return arc;
+	}
+
+	float MaxSeparation( b3Transform transformBtoA, float* faceSeparationA, float* faceSeparationB, EdgeAxis* edgeAxis ) const
+	{
+		float separationA = -FLT_MAX;
+		for ( int i = 0; i < m_hullA->faceCount; ++i )
+		{
+			separationA = b3MaxFloat( separationA, ComplexHullCulling::FaceSeparationA( m_hullA, m_hullB, transformBtoA, i ) );
+		}
+
+		float separationB = -FLT_MAX;
+		for ( int i = 0; i < m_hullB->faceCount; ++i )
+		{
+			separationB = b3MaxFloat( separationB, ComplexHullCulling::FaceSeparationB( m_hullA, m_hullB, transformBtoA, i ) );
+		}
+
+		EdgeAxis edge = FindBestEdgeAxis( m_hullA, m_hullB, transformBtoA );
+
+		if ( faceSeparationA != nullptr )
+		{
+			*faceSeparationA = separationA;
+			*faceSeparationB = separationB;
+			*edgeAxis = edge;
+		}
+
+		return b3MaxFloat( edge.separation, b3MaxFloat( separationA, separationB ) );
+	}
+
+	// Random poses placed just into contact until an edge axis wins with an edge outside its wedge
+	void Search()
+	{
+		m_searchFound = false;
+		m_searchCount = 0;
+
+		for ( int trial = 0; trial < 500 && m_searchFound == false; ++trial )
+		{
+			m_searchCount += 1;
+
+			b3Vec3 direction = RandomDirection();
+			b3Vec3 axis = RandomDirection();
+			float angle = 2.0f * B3_PI * RandomFloat();
+			b3Quat rotation = b3MakeQuatFromAxisAngle( axis, angle );
+
+			// Bisect on the center distance to reach a slight overlap
+			float target = -0.02f * b3GetLengthUnitsPerMeter();
+			float lower = 0.0f;
+			float upper = 1.1f * ( b3Length( b3AABB_Extents( m_hullA->aabb ) ) + b3Length( b3AABB_Extents( m_hullB->aabb ) ) );
+			for ( int iteration = 0; iteration < 24; ++iteration )
+			{
+				float mid = 0.5f * ( lower + upper );
+				b3Transform transform = { b3MulSV( mid, direction ), rotation };
+				if ( MaxSeparation( transform, nullptr, nullptr, nullptr ) < target )
+				{
+					lower = mid;
+				}
+				else
+				{
+					upper = mid;
+				}
+			}
+
+			m_transformB = { m_transformA.p + b3MulSV( upper, direction ), rotation };
+			Compute();
+
+			// Only accept clear examples, well outside the wedge with a clear edge win
+			float margin = m_edge.separation - b3MaxFloat( m_faceSeparationA, m_faceSeparationB );
+			float outside = b3MaxFloat( m_arcA.outsideDegrees, m_arcB.outsideDegrees );
+			m_searchFound = m_edgeWins && outside >= 10.0f && margin >= 0.02f * b3GetLengthUnitsPerMeter();
+		}
+	}
+
+	void Compute()
+	{
+		b3Transform transformBtoA = b3InvMulWorldTransforms( m_transformA, m_transformB );
+		MaxSeparation( transformBtoA, &m_faceSeparationA, &m_faceSeparationB, &m_edge );
+		m_edgeWins = m_edge.edgeA != B3_NULL_INDEX && m_edge.separation > b3MaxFloat( m_faceSeparationA, m_faceSeparationB );
+
+		m_centerOffset = b3Sub( b3TransformPoint( transformBtoA, m_hullB->center ), m_hullA->center );
+		m_radius = m_hullA->innerRadius + m_hullB->innerRadius;
+
+		if ( m_edge.edgeA == B3_NULL_INDEX )
+		{
+			return;
+		}
+
+		const b3HullHalfEdge* edgesA = b3GetHullEdges( m_hullA );
+		const b3Plane* planesA = b3GetHullPlanes( m_hullA );
+		int faceA1 = edgesA[m_edge.edgeA].face;
+		int faceA2 = edgesA[m_edge.edgeA + 1].face;
+		m_arcA = MakeArc( planesA[faceA1].normal, planesA[faceA2].normal, m_centerOffset,
+						  ComplexHullCulling::FaceSeparationA( m_hullA, m_hullB, transformBtoA, faceA1 ),
+						  ComplexHullCulling::FaceSeparationA( m_hullA, m_hullB, transformBtoA, faceA2 ) );
+
+		const b3HullHalfEdge* edgesB = b3GetHullEdges( m_hullB );
+		const b3Plane* planesB = b3GetHullPlanes( m_hullB );
+		int faceB1 = edgesB[m_edge.edgeB].face;
+		int faceB2 = edgesB[m_edge.edgeB + 1].face;
+		b3Vec3 C = b3Neg( b3RotateVector( transformBtoA.q, planesB[faceB1].normal ) );
+		b3Vec3 D = b3Neg( b3RotateVector( transformBtoA.q, planesB[faceB2].normal ) );
+		m_arcB = MakeArc( C, D, m_centerOffset, ComplexHullCulling::FaceSeparationB( m_hullA, m_hullB, transformBtoA, faceB1 ),
+						  ComplexHullCulling::FaceSeparationB( m_hullA, m_hullB, transformBtoA, faceB2 ) );
+	}
+
+	bool DrawControls() override
+	{
+		const char* hullNames[] = { "Slab", "Tetrahedron", "Complex Hull" };
+		int hullType = m_hullType;
+		if ( ImGui::Combo( "Hull", &hullType, hullNames, IM_ARRAYSIZE( hullNames ) ) )
+		{
+			SetHull( hullType );
+		}
+
+		if ( ImGui::Button( "Find Example" ) )
+		{
+			Search();
+		}
+
+		return true;
+	}
+
+	void Step() override
+	{
+		Compute();
+	}
+
+	b3Pos GaussPoint( b3Vec3 directionInA ) const
+	{
+		return m_gaussCenter + b3MulSV( m_gaussRadius, b3RotateVector( m_transformA.q, directionInA ) );
+	}
+
+	void DrawGreatArc( b3Vec3 u, b3Vec3 v, Vec4 color, float thickness, OverlayOcclusionMode mode ) const
+	{
+		constexpr int segmentCount = 32;
+		b3Pos previous = GaussPoint( u );
+		for ( int i = 1; i <= segmentCount; ++i )
+		{
+			float s = (float)i / segmentCount;
+			b3Pos point = GaussPoint( b3Normalize( b3Add( b3MulSV( 1.0f - s, u ), b3MulSV( s, v ) ) ) );
+			DrawLineEx( previous, point, color, thickness, OVERLAY_THICKNESS_PIXELS, mode );
+			previous = point;
+		}
+	}
+
+	// The full great circle through the arc, dashed
+	void DrawGreatCircle( b3Vec3 u, b3Vec3 v, Vec4 color ) const
+	{
+		b3Vec3 axis = b3Normalize( b3Cross( u, v ) );
+		b3Vec3 w = b3Cross( axis, u );
+		constexpr int segmentCount = 96;
+		b3Pos previous = GaussPoint( u );
+		for ( int i = 1; i <= segmentCount; ++i )
+		{
+			float angle = 2.0f * B3_PI * i / segmentCount;
+			b3CosSin cs = b3ComputeCosSin( angle );
+			b3Pos point = GaussPoint( b3Add( b3MulSV( cs.cosine, u ), b3MulSV( cs.sine, w ) ) );
+			DrawLineEx( previous, point, color, 1.0f, OVERLAY_THICKNESS_PIXELS, OVERLAY_OCCLUSION_DASHED );
+			previous = point;
+		}
+	}
+
+	void DrawEdge( b3WorldTransform transform, const b3HullData* hull, int edgeIndex, Vec4 color ) const
+	{
+		const b3HullHalfEdge* edges = b3GetHullEdges( hull );
+		const b3Vec3* points = b3GetHullPoints( hull );
+		b3Pos p1 = b3TransformWorldPoint( transform, points[edges[edgeIndex].origin] );
+		b3Pos p2 = b3TransformWorldPoint( transform, points[edges[edgeIndex + 1].origin] );
+		DrawLineEx( p1, p2, color, 5.0f, OVERLAY_THICKNESS_PIXELS, OVERLAY_OCCLUSION_DIM );
+	}
+
+	void DrawArcText( const char* name, const Arc& arc, float edgeBound )
+	{
+		if ( arc.inside )
+		{
+			DrawTextLine( "%s edge: d peak inside wedge", name );
+		}
+		else
+		{
+			DrawTextLine( "%s edge: d peak OUTSIDE wedge by %.1f degrees", name, arc.outsideDegrees );
+		}
+		DrawTextLine( "   sphere bound  u %.3f  v %.3f  n %.3f", arc.a - m_radius, arc.b - m_radius, edgeBound );
+		DrawTextLine( "   separation    u %.4f  v %.4f  n %.4f", arc.separationU, arc.separationV, m_edge.separation );
+	}
+
+	void Render() override
+	{
+		DrawHull( m_transformA, m_hullA, MakeColor( b3_colorSlateGray ) );
+		DrawHull( m_transformB, m_hullB, MakeColor( b3_colorSlateGray ) );
+
+		b3Pos centerA = b3TransformWorldPoint( m_transformA, m_hullA->center );
+		b3Pos centerB = b3TransformWorldPoint( m_transformB, m_hullB->center );
+		DrawLine( centerA, centerB, MakeColor( b3_colorWhite ) );
+
+		DrawTextLine( "drag to move B, shift + drag to rotate B" );
+		DrawTextLine( "search: %s after %d poses", m_searchFound ? "found" : "not found", m_searchCount );
+		DrawTextLine( "best separation: face A %.4f, face B %.4f, edge %.4f -> %s", m_faceSeparationA, m_faceSeparationB,
+					  m_edge.separation, m_edgeWins ? "EDGE WINS" : "face wins" );
+
+		if ( m_edge.edgeA == B3_NULL_INDEX )
+		{
+			Manifold::Render();
+			return;
+		}
+
+		Vec4 colorA = MakeColor( b3_colorOrange );
+		Vec4 colorB = MakeColor( b3_colorDeepSkyBlue );
+		Vec4 colorN = MakeColor( b3_colorGold );
+		Vec4 colorPeak = MakeColor( b3_colorMagenta );
+
+		DrawEdge( m_transformA, m_hullA, m_edge.edgeA, colorA );
+		DrawEdge( m_transformB, m_hullB, m_edge.edgeB, colorB );
+
+		// Winning axis from the midpoint of edge A
+		{
+			const b3HullHalfEdge* edges = b3GetHullEdges( m_hullA );
+			const b3Vec3* points = b3GetHullPoints( m_hullA );
+			b3Vec3 mid = b3Lerp( points[edges[m_edge.edgeA].origin], points[edges[m_edge.edgeA + 1].origin], 0.5f );
+			b3Pos p = b3TransformWorldPoint( m_transformA, mid );
+			b3Vec3 n = b3RotateVector( m_transformA.q, m_edge.normal );
+			DrawArrowEx( p, p + b3MulSV( 1.0f, n ), colorN, 3.0f, OVERLAY_THICKNESS_PIXELS, OVERLAY_OCCLUSION_DIM, 0.2f );
+		}
+
+		// Gauss map: both arcs cross at the edge axis n. The magenta dots are the peaks of dot(n, d) on each
+		// great circle. The peak of an arc is only reachable when it lies on the arc.
+		b3Sphere unitSphere = { b3Vec3_zero, m_gaussRadius };
+		DrawWireSphere( { m_gaussCenter, b3Quat_identity }, &unitSphere, 24, MakeColor( b3_colorDimGray ) );
+
+		DrawGreatCircle( m_arcA.u, m_arcA.v, colorA );
+		DrawGreatCircle( m_arcB.u, m_arcB.v, colorB );
+		DrawGreatArc( m_arcA.u, m_arcA.v, colorA, 5.0f, OVERLAY_OCCLUSION_DIM );
+		DrawGreatArc( m_arcB.u, m_arcB.v, colorB, 5.0f, OVERLAY_OCCLUSION_DIM );
+
+		DrawPoint( GaussPoint( m_arcA.u ), 8.0f, colorA );
+		DrawPoint( GaussPoint( m_arcA.v ), 8.0f, colorA );
+		DrawPoint( GaussPoint( m_arcB.u ), 8.0f, colorB );
+		DrawPoint( GaussPoint( m_arcB.v ), 8.0f, colorB );
+		DrawString3D( GaussPoint( m_arcA.u ), colorA, " uA" );
+		DrawString3D( GaussPoint( m_arcA.v ), colorA, " vA" );
+		DrawString3D( GaussPoint( m_arcB.u ), colorB, " uB" );
+		DrawString3D( GaussPoint( m_arcB.v ), colorB, " vB" );
+
+		DrawPoint( GaussPoint( m_arcA.peak ), 10.0f, colorPeak );
+		DrawString3D( GaussPoint( m_arcA.peak ), colorPeak, " peak A" );
+		DrawPoint( GaussPoint( m_arcB.peak ), 10.0f, colorPeak );
+		DrawString3D( GaussPoint( m_arcB.peak ), colorPeak, " peak B" );
+
+		DrawPoint( GaussPoint( m_edge.normal ), 12.0f, colorN );
+		DrawString3D( GaussPoint( m_edge.normal ), colorN, " n" );
+
+		b3Vec3 dHat = b3Normalize( m_centerOffset );
+		DrawPoint( GaussPoint( dHat ), 10.0f, MakeColor( b3_colorWhite ) );
+		DrawString3D( GaussPoint( dHat ), MakeColor( b3_colorWhite ), " d" );
+
+		float edgeBound = b3Dot( m_edge.normal, m_centerOffset ) - m_radius;
+		DrawTextLine( "|d| - rA - rB = %.3f", b3Length( m_centerOffset ) - m_radius );
+		DrawArcText( "A", m_arcA, edgeBound );
+		DrawArcText( "B", m_arcB, edgeBound );
+
+		Manifold::Render();
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new EdgeAxisWedge( context );
+	}
+
+	b3HullData* m_hullA;
+	b3HullData* m_hullB;
+	EdgeAxis m_edge;
+	Arc m_arcA;
+	Arc m_arcB;
+	b3Vec3 m_centerOffset;
+	b3Pos m_gaussCenter;
+	float m_gaussRadius;
+	float m_radius;
+	float m_faceSeparationA;
+	float m_faceSeparationB;
+	uint32_t m_seed;
+	int m_searchCount;
+	bool m_searchFound;
+	bool m_edgeWins;
+	b3BoxHull m_box;
+	b3HullData* m_createdHull;
+	int m_hullType;
+};
+
+static int sampleEdgeAxisWedge = RegisterSample( "Manifold", "Edge Axis Wedge", EdgeAxisWedge::Create );
+
 class TriangleAndHull : public TriangleManifold
 {
 public:
