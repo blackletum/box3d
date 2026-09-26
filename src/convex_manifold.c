@@ -2313,8 +2313,10 @@ void b3CollideHulls( b3LocalManifold* manifold, int capacity, const b3HullData* 
 	float clipSeparation = cache->separation;
 	float edgeTol = linearSlop;
 
-	// Face contact can be empty if it does not realize the axis of minimum penetration.
-	// Create edge contact if face contact fails or edge contact is significantly better!
+	// Face contact can be empty if it is not the axis of maximum separation. It can also
+	// be empty in narrow cases in the speculative region. If that case was important then
+	// a GJK fallback would be used. So far it doesn't seem important.
+	// Create edge contact if face contact fails or edge contact is significantly better.
 	if ( ( manifold->pointCount == 0 && edgeQuery.separation > faceSeparation ) ||
 		 edgeQuery.separation > clipSeparation + edgeTol )
 	{

@@ -10,6 +10,16 @@
 
 #include <imgui.h>
 
+// Trackball about the camera axes so the near side of the shape follows the cursor regardless of the
+// shape or camera orientation. A drag across the window height is a full turn.
+static b3Quat DragRotation( const Camera* camera, b3Quat q, float dx, float dy )
+{
+	float scale = 2.0f * B3_PI / b3MaxFloat( (float)camera->m_height, 1.0f );
+	b3Quat yaw = b3MakeQuatFromAxisAngle( camera->GetUp(), scale * dx );
+	b3Quat pitch = b3MakeQuatFromAxisAngle( camera->GetRight(), scale * dy );
+	return b3NormalizeQuat( b3MulQuat( b3MulQuat( pitch, yaw ), q ) );
+}
+
 class Manifold : public Sample
 {
 public:
@@ -39,9 +49,8 @@ public:
 		m_satCache = {};
 		m_manualFeature = 0;
 		m_baseTranslation = b3Pos_zero;
-		m_baseQuaternion = b3Quat_identity;
-		m_baseX = 0;
-		m_baseY = 0;
+		m_lastX = 0.0f;
+		m_lastY = 0.0f;
 		m_origin = b3Pos_zero;
 		m_useCache = false;
 		m_tracking = false;
@@ -116,9 +125,8 @@ public:
 		{
 			if ( modifiers & MOD_SHIFT )
 			{
-				m_baseX = p.x;
-				m_baseY = p.y;
-				m_baseQuaternion = m_transformB.q;
+				m_lastX = p.x;
+				m_lastY = p.y;
 				m_rotating = true;
 			}
 			else
@@ -148,12 +156,9 @@ public:
 
 		if ( m_rotating )
 		{
-			int x = p.x;
-			int y = p.y;
-
-			b3Quat qx = b3MakeQuatFromAxisAngle( b3Vec3_axisY, 0.01f * ( x - m_baseX ) );
-			b3Quat qz = b3MakeQuatFromAxisAngle( b3Vec3_axisZ, 0.01f * ( y - m_baseY ) );
-			m_transformB.q = b3NormalizeQuat( b3MulQuat( m_baseQuaternion, b3MulQuat( qx, qz ) ) );
+			m_transformB.q = DragRotation( m_camera, m_transformB.q, p.x - m_lastX, p.y - m_lastY );
+			m_lastX = p.x;
+			m_lastY = p.y;
 		}
 	}
 
@@ -163,13 +168,12 @@ public:
 	b3WorldTransform m_transformA;
 	b3WorldTransform m_transformB;
 	b3Pos m_baseTranslation;
-	b3Quat m_baseQuaternion;
 	b3Pos m_origin;
 	b3SimplexCache m_simplexCache;
 	b3SATCache m_satCache;
 	int m_manualFeature;
-	int m_baseX;
-	int m_baseY;
+	float m_lastX;
+	float m_lastY;
 	bool m_useCache;
 	bool m_tracking;
 	bool m_rotating;
@@ -203,9 +207,8 @@ public:
 		m_simplexCache = {};
 		m_satCache = {};
 		m_baseTranslation = b3Pos_zero;
-		m_baseQuaternion = b3Quat_identity;
-		m_baseX = 0;
-		m_baseY = 0;
+		m_lastX = 0.0f;
+		m_lastY = 0.0f;
 		m_origin = b3Pos_zero;
 		m_useCache = false;
 		m_tracking = false;
@@ -293,9 +296,8 @@ public:
 		{
 			if ( modifiers & MOD_SHIFT )
 			{
-				m_baseX = p.x;
-				m_baseY = p.y;
-				m_baseQuaternion = m_transformB.q;
+				m_lastX = p.x;
+				m_lastY = p.y;
 				m_rotating = true;
 			}
 			else
@@ -325,12 +327,9 @@ public:
 
 		if ( m_rotating )
 		{
-			int x = p.x;
-			int y = p.y;
-
-			b3Quat qx = b3MakeQuatFromAxisAngle( b3Vec3_axisY, 0.01f * ( x - m_baseX ) );
-			b3Quat qz = b3MakeQuatFromAxisAngle( b3Vec3_axisZ, 0.01f * ( y - m_baseY ) );
-			m_transformB.q = b3NormalizeQuat( b3MulQuat( m_baseQuaternion, b3MulQuat( qx, qz ) ) );
+			m_transformB.q = DragRotation( m_camera, m_transformB.q, p.x - m_lastX, p.y - m_lastY );
+			m_lastX = p.x;
+			m_lastY = p.y;
 		}
 	}
 
@@ -346,13 +345,12 @@ public:
 
 	b3Vec3 m_triangle[3] = {};
 	b3Pos m_baseTranslation;
-	b3Quat m_baseQuaternion;
 	b3Pos m_origin;
 	b3SimplexCache m_simplexCache;
 	b3SATCache m_satCache;
 	int m_manualFeature;
-	int m_baseX;
-	int m_baseY;
+	float m_lastX;
+	float m_lastY;
 	bool m_useCache;
 	bool m_tracking;
 	bool m_rotating;
@@ -831,8 +829,13 @@ public:
 			m_camera->SetView( 20.0f, 20.0f, 14.0f, { 0.0f, 1.8f, 0.0f } );
 		}
 
-		m_hullA = b3CreateComplexHull( 2.0f );
-		m_hullB = b3CreateComplexHull( 2.0f );
+		m_useCylinders = false;
+		m_cylinderHeight = 2.0f;
+		m_cylinderRadius = 2.0f;
+		m_cylinderSides = 32;
+		m_hullA = nullptr;
+		m_hullB = nullptr;
+		CreateHulls();
 
 		m_transformA = { { 0.0f, 0.0f, 0.0f }, b3Quat_identity };
 		m_transformB = { { 0.4f, 3.6f, 0.2f }, b3MakeQuatFromAxisAngle( b3Normalize( { 1.0f, 0.0f, 1.0f } ), 0.3f ) };
@@ -849,11 +852,49 @@ public:
 		b3DestroyHull( m_hullB );
 	}
 
+	void CreateHulls()
+	{
+		if ( m_hullA != nullptr )
+		{
+			b3DestroyHull( m_hullA );
+			b3DestroyHull( m_hullB );
+		}
+
+		if ( m_useCylinders )
+		{
+			float yOffset = -0.5f * m_cylinderHeight;
+			m_hullA = b3CreateCylinder( m_cylinderHeight, m_cylinderRadius, yOffset, m_cylinderSides );
+			m_hullB = b3CreateCylinder( m_cylinderHeight, m_cylinderRadius, yOffset, m_cylinderSides );
+		}
+		else
+		{
+			m_hullA = b3CreateComplexHull( 2.0f );
+			m_hullB = b3CreateComplexHull( 2.0f );
+		}
+	}
+
 	bool DrawControls() override
 	{
 		ImGui::Checkbox( "Inscribed spheres", &m_showSpheres );
 		ImGui::Checkbox( "Culled features", &m_showCulled );
 		ImGui::Checkbox( "Face normals", &m_showNormals );
+
+		bool rebuild = ImGui::Checkbox( "Cylinders", &m_useCylinders );
+		if ( m_useCylinders )
+		{
+			rebuild |= ImGui::SliderFloat( "Height", &m_cylinderHeight, 0.1f, 8.0f, "%.2f" );
+			rebuild |= ImGui::SliderFloat( "Radius", &m_cylinderRadius, 0.1f, 4.0f, "%.2f" );
+			rebuild |= ImGui::SliderInt( "Sides", &m_cylinderSides, 3, 32 );
+		}
+
+		if ( rebuild )
+		{
+			m_cylinderHeight = b3ClampFloat( m_cylinderHeight, 0.1f, 8.0f );
+			m_cylinderRadius = b3ClampFloat( m_cylinderRadius, 0.1f, 4.0f );
+			m_cylinderSides = b3ClampInt( m_cylinderSides, 3, 32 );
+			CreateHulls();
+		}
+
 		return true;
 	}
 
@@ -1196,6 +1237,10 @@ public:
 	float m_separationB;
 	float m_gap;
 	b3SeparatingFeature m_separatedFeature;
+	float m_cylinderHeight;
+	float m_cylinderRadius;
+	int m_cylinderSides;
+	bool m_useCylinders;
 	bool m_showSpheres;
 	bool m_showCulled;
 	bool m_showNormals;
@@ -1219,12 +1264,12 @@ public:
 			m_camera->SetView( 0.0f, 30.0f, 3.0f, b3Pos_zero );
 		}
 
-		//m_triangle[0] = { 1.00000000, 0, 1.00000000 };
-		//m_triangle[1] = { 1.00000000, 0, 0.00000000 };
-		//m_triangle[2] = { 0.00000000, 0, 0.00000000 };
+		// m_triangle[0] = { 1.00000000, 0, 1.00000000 };
+		// m_triangle[1] = { 1.00000000, 0, 0.00000000 };
+		// m_triangle[2] = { 0.00000000, 0, 0.00000000 };
 
 		m_triangle[0] = { 0.299769998f, -1.01549578f, -0.744717002f };
-		m_triangle[1] = { 0.299769998f, -1.01549578f, 1.28728306f   };
+		m_triangle[1] = { 0.299769998f, -1.01549578f, 1.28728306f };
 		m_triangle[2] = { 0.299769998f, -0.913895786f, 0.271283031f };
 
 		float bodyHalfWidth = 0.304800004f;
@@ -1234,7 +1279,7 @@ public:
 
 		m_transformA = b3WorldTransform_identity;
 		m_transformB = b3WorldTransform_identity;
-		//m_transformB.p = { -2.16650009f, 0.912535489f, 0.00000000f };
+		// m_transformB.p = { -2.16650009f, 0.912535489f, 0.00000000f };
 
 		// b3MeshEdgeFlags
 		m_flags = 0;
@@ -1307,8 +1352,8 @@ public:
 			b3TransformPoint( xf, m_triangle[2] ),
 		};
 
-		b3CollideTriangleAndHull( &m_manifold, m_pointCapacity, localTriangle[0], localTriangle[1], localTriangle[2],
-								  m_flags, m_hull, &m_satCache, true );
+		b3CollideTriangleAndHull( &m_manifold, m_pointCapacity, localTriangle[0], localTriangle[1], localTriangle[2], m_flags,
+								  m_hull, &m_satCache, true );
 	}
 
 	int m_flags;
