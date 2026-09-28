@@ -1368,7 +1368,7 @@ static inline void b3GetFaceDots( const b3HullData* hull, b3Vec3 d, float* dots 
 // c = dot(n1, n2)
 // bound = maxFaceSeparation + radiusBound
 //
-// This returns 1 if the edges is a candidate and 0 otherwise.
+// This returns 1 if the edge is a candidate and 0 otherwise.
 static inline int b3TestEdgeCandidate( float a1, float a2, float c, float bound )
 {
 	// c = cos(theta), the angle between the normals.
@@ -1385,14 +1385,14 @@ static inline int b3TestEdgeCandidate( float a1, float a2, float c, float bound 
 	// Note: when earlyReturn == false, bound == -INFINITY and this is always true.
 	int exterior = b3MaxFloat( a1, a2 ) >= bound;
 
-	// Project d into the plane that holds both n1 and n2, call that vector dp.
+	// Project d into the plane that holds both n1 and n2, call that vector w.
 	// Introduce the coordinates b1 and b2 (these have units of length).
 	//
-	// dp = b1*n1 + b2*n2
+	// w = b1*n1 + b2*n2
 	//
-	// Since dp is the projection of d into the plane formed by the cross(n1, n2):
-	// dot(n1, dp) == dot(n1, d) == a1
-	// dot(n2, dp) == dot(n2, d) == a2
+	// Since w is the projection of d into the plane of cross(n1, n2):
+	// dot(n1, w) == dot(n1, d) == a1
+	// dot(n2, w) == dot(n2, d) == a2
 	//
 	// Dot the equation with n1 and n2:
 	// a1 = b1 + b2*c
@@ -1405,16 +1405,16 @@ static inline int b3TestEdgeCandidate( float a1, float a2, float c, float bound 
 	// s = 1 - c * c is positive, so b1 and b2 must be positive for d to live in
 	// the arc between n1 and n2.
 	//
-	// The peak value along d is then norm(dp):
-	// dot(dp, dp) = dot(b1*n1 + b2*n2, d)
-	//             = b1*a1 + b2*a2
-	//             = (a1*a1 - a1*a2*c + a2*a2 - a1*a2*c) / s
-	//             = (a1*a1 + a2*a2 - 2*a1*a2*c) / s
-	//             = t / s
+	// The peak value in the direction of d is norm(w):
+	// dot(w, w) = dot(b1*n1 + b2*n2, d)
+	//           = b1*a1 + b2*a2
+	//           = (a1*a1 - a1*a2*c + a2*a2 - a1*a2*c) / s
+	//           = (a1*a1 + a2*a2 - 2*a1*a2*c) / s
+	//           = t / s
 	//
 	// The interior is a candidate if:
-	// norm(dp) > bound
-	// sqrt(t / s) > bound
+	// norm(w) >= bound
+	// sqrt(t / s) >= bound
 	// If bound < 0 this is always true. Otherwise
 	// t > bound^2 * s
 	//
