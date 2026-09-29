@@ -8,6 +8,10 @@
 #include "benchmarks.h"
 #include "utils.h"
 
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+#include "sat_benchmark.h"
+#endif
+
 #include "box3d/box3d.h"
 #include "box3d/constants.h"
 #include "box3d/math_functions.h"
@@ -111,6 +115,71 @@ static int FindBenchmark( const Benchmark* benchmarks, int count, const char* na
 	return -1;
 }
 
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+// GJK versus SAT on hull pairs held inside the speculative margin. Reports the min time per query over the runs.
+static void RunSatBenchmarks( int runCount )
+{
+#ifdef NDEBUG
+	int repeatCount = 20;
+#else
+	int repeatCount = 1;
+#endif
+
+	printf( "benchmark: sat, pairs = %d, repeats = %d\n", SAT_PAIR_COUNT, repeatCount );
+	printf( "time per query (us), sat full has the inscribed sphere bound disabled\n" );
+	printf( "%-20s %10s %10s %10s %10s\n", "pair", "gjk cold", "gjk warm", "sat", "sat full" );
+
+	for ( int typeA = 0; typeA < satHull_count; ++typeA )
+	{
+		for ( int typeB = typeA; typeB < satHull_count; ++typeB )
+		{
+			SatBenchmarkData* data = CreateSatBenchmark( (SatHullType)typeA, (SatHullType)typeB );
+
+			float coldMs = FLT_MAX;
+			float warmMs = FLT_MAX;
+			float satMs = FLT_MAX;
+			float fullMs = FLT_MAX;
+			int queryCount = 0;
+			int earlyReturnCount = 0;
+
+			for ( int runIndex = 0; runIndex < runCount; ++runIndex )
+			{
+				EnableSatInscribedSphere( data, true );
+				SatBenchmarkResult cold = RunSatBenchmark( data, repeatCount, false );
+				SatBenchmarkResult warm = RunSatBenchmark( data, repeatCount, true );
+
+				EnableSatInscribedSphere( data, false );
+				SatBenchmarkResult full = RunSatBenchmark( data, repeatCount, false );
+
+				coldMs = b3MinFloat( coldMs, cold.distanceMs );
+				warmMs = b3MinFloat( warmMs, warm.distanceMs );
+				satMs = b3MinFloat( satMs, b3MinFloat( cold.satMs, warm.satMs ) );
+				fullMs = b3MinFloat( fullMs, full.satMs );
+				queryCount = cold.queryCount;
+				earlyReturnCount += cold.earlyReturnCount + full.earlyReturnCount;
+			}
+
+			char name[32];
+			snprintf( name, sizeof( name ), "%s/%s", GetSatHullName( (SatHullType)typeA ), GetSatHullName( (SatHullType)typeB ) );
+
+			float scale = 1000.0f / queryCount;
+			printf( "%-20s %10.3f %10.3f %10.3f %10.3f\n", name, scale * coldMs, scale * warmMs, scale * satMs,
+					scale * fullMs );
+
+			if ( earlyReturnCount > 0 || data->maxPlacementError > 0.01f * data->targetDistance )
+			{
+				printf( "  warning: early returns = %d, max placement error = %g\n", earlyReturnCount,
+						data->maxPlacementError );
+			}
+
+			DestroySatBenchmark( data );
+		}
+	}
+
+	printf( "\n" );
+}
+#endif
+
 static void PrintBenchmarks( const Benchmark* benchmarks, int count )
 {
 	printf( "Registered benchmarks:\n" );
@@ -142,6 +211,9 @@ static void PrintBenchmarks( const Benchmark* benchmarks, int count )
 
 // Run benchmark 3 with 4 workers and run once. Disable continuous collision. Record the step times.
 // start /affinity 0x5555 .\build\bin\Release\benchmark.exe -t=4 -w=4 -b=3 -r=1 -nc -s
+
+// Compare GJK and SAT on hull pairs in the speculative regime. Static Box3D only.
+// start /affinity 0x5555 .\build\bin\Release\benchmark.exe --sat -r=5
 
 int main( int argc, char** argv )
 {
@@ -211,6 +283,7 @@ int main( int argc, char** argv )
 	b3Counters counters = { 0 };
 	bool enableContinuous = true;
 	bool recordStepTimes = false;
+	bool runSat = false;
 
 	assert( maxThreadCount <= B3_MAX_WORKERS );
 
@@ -258,6 +331,15 @@ int main( int argc, char** argv )
 		{
 			recordStepTimes = true;
 		}
+		else if ( strcmp( arg, "-sat" ) == 0 || strcmp( arg, "--sat" ) == 0 )
+		{
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+			runSat = true;
+#else
+			printf( "The SAT benchmark requires static linkage\n" );
+			exit( 1 );
+#endif
+		}
 		else if ( strcmp( arg, "-l" ) == 0 || strcmp( arg, "--list" ) == 0 )
 		{
 			PrintBenchmarks( benchmarks, benchmarkCount );
@@ -272,6 +354,7 @@ int main( int argc, char** argv )
 					"-r, --repeats=<integer>: number of repeats (default is 4)\n"
 					"-nc, --no-continuous: disable continuous collision\n"
 					"-s, --record-steps: record step times\n"
+					"-sat, --sat: compare GJK and SAT on hull pairs, then exit\n"
 					"-l, --list: list the registered benchmarks\n"
 					"-h, --help: print this help\n" );
 			exit( 0 );
@@ -286,6 +369,15 @@ int main( int argc, char** argv )
 	{
 		singleWorkerCount = b3ClampInt( singleWorkerCount, 1, maxThreadCount );
 	}
+
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+	if ( runSat )
+	{
+		RunSatBenchmarks( runCount );
+		free( profiles );
+		return 0;
+	}
+#endif
 
 	printf( "Starting benchmarks\n" );
 	printf( "======================================\n" );
