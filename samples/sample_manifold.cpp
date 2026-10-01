@@ -823,6 +823,9 @@ public:
 		e_unreached = 0,
 		e_culled,
 		e_tested,
+
+		// Kept by the center bound and culled by the edge plane bound
+		e_culledByPlane,
 	};
 
 	explicit HullCulling( SampleContext* context )
@@ -847,6 +850,7 @@ public:
 		m_showSpheres = true;
 		m_showCulled = true;
 		m_showNormals = true;
+		m_usePlaneBound = false;
 		ResetCounts();
 	}
 
@@ -884,6 +888,7 @@ public:
 		ImGui::Checkbox( "Inscribed spheres", &m_showSpheres );
 		ImGui::Checkbox( "Culled features", &m_showCulled );
 		ImGui::Checkbox( "Face normals", &m_showNormals );
+		ImGui::Checkbox( "Edge plane bound", &m_usePlaneBound );
 
 		bool rebuild = ImGui::Checkbox( "Cylinders", &m_useCylinders );
 		if ( m_useCylinders )
@@ -914,6 +919,8 @@ public:
 		m_seedB = 0;
 		m_keptEdgeCountA = 0;
 		m_keptEdgeCountB = 0;
+		m_centerKeptEdgeCountA = 0;
+		m_centerKeptEdgeCountB = 0;
 		m_separationA = -FLT_MAX;
 		m_separationB = -FLT_MAX;
 		m_gap = 0.0f;
@@ -958,6 +965,50 @@ public:
 		bool interior =
 			a >= c * b && b >= c * a && length >= bound && ( bound <= 0.0f || s < parallelTolerance || t >= bound * bound * s );
 		return endpoint || interior;
+	}
+
+	// Mirrors b3TestEdgeCandidateSorted
+	static bool ArcCanReachSorted( float a, float b, float c, float bound )
+	{
+		const float parallelTolerance = 1.0e-4f;
+		float hi = b3MaxFloat( a, b );
+		float lo = b3MinFloat( a, b );
+		float u = lo - c * hi;
+		float s = 1.0f - c * c;
+		bool endpoint = hi >= bound;
+		bool interior = u >= 0.0f && ( u * u >= ( bound - hi ) * ( bound + hi ) * s || s < parallelTolerance );
+		return endpoint || interior;
+	}
+
+	// Edge culling with the bound measured from the edge plane to the inscribed sphere of the other hull.
+	// The arc inputs are dot(n, otherCenter) - planeOffset for the two faces sharing the edge and the bound
+	// only includes the inner radius of the other hull. Mirrors B3_EDGE_CANDIDATE_MODE 3.
+	// This only demotes edges kept by the center bound, so the difference between the two is visible.
+	int ApplyPlaneBound( const b3HullData* hull, b3Vec3 otherCenter, float threshold, uint8_t* states )
+	{
+		const b3HullHalfEdge* edges = b3GetHullEdges( hull );
+		const b3Plane* planes = b3GetHullPlanes( hull );
+		int keptCount = 0;
+		for ( int i = 0; i < hull->edgeCount; i += 2 )
+		{
+			b3Plane plane1 = planes[edges[i].face];
+			b3Plane plane2 = planes[edges[i + 1].face];
+			float d1 = b3Dot( plane1.normal, otherCenter ) - plane1.offset;
+			float d2 = b3Dot( plane2.normal, otherCenter ) - plane2.offset;
+			float c = b3Dot( plane1.normal, plane2.normal );
+			bool kept = ArcCanReachSorted( d1, d2, c, threshold );
+			keptCount += kept ? 1 : 0;
+
+			if ( kept )
+			{
+				states[i / 2] = e_tested;
+			}
+			else if ( states[i / 2] == e_tested )
+			{
+				states[i / 2] = e_culledByPlane;
+			}
+		}
+		return keptCount;
 	}
 
 	// Mirrors the culling in b3ComputeSeparatingAxis with early return enabled
@@ -1060,6 +1111,21 @@ public:
 			m_edgeStateB[i / 2] = kept ? e_tested : e_culled;
 			m_keptEdgeCountB += kept ? 1 : 0;
 		}
+
+		m_centerKeptEdgeCountA = m_keptEdgeCountA;
+		m_centerKeptEdgeCountB = m_keptEdgeCountB;
+
+		if ( m_usePlaneBound )
+		{
+			float maxFaceSeparation = b3MaxFloat( m_separationA, m_separationB );
+			float slack = radius - radiusBound;
+			float thresholdA = maxFaceSeparation + hullB->innerRadius - slack;
+			float thresholdB = maxFaceSeparation + hullA->innerRadius - slack;
+			b3Vec3 centerBinA = b3TransformPoint( transformBtoA, hullB->center );
+			b3Vec3 centerAinB = b3InvTransformPoint( transformBtoA, hullA->center );
+			m_keptEdgeCountA = ApplyPlaneBound( hullA, centerBinA, thresholdA, m_edgeStateA );
+			m_keptEdgeCountB = ApplyPlaneBound( hullB, centerAinB, thresholdB, m_edgeStateB );
+		}
 	}
 
 	void Step() override
@@ -1093,6 +1159,10 @@ public:
 			if ( state == e_tested )
 			{
 				DrawLineEx( p1, p2, keptColor, 4.0f, OVERLAY_THICKNESS_PIXELS, OVERLAY_OCCLUSION_DIM );
+			}
+			else if ( state == e_culledByPlane )
+			{
+				DrawLineEx( p1, p2, MakeColor( b3_colorMagenta ), 2.0f, OVERLAY_THICKNESS_PIXELS, OVERLAY_OCCLUSION_DIM );
 			}
 			else if ( state == e_culled && m_showCulled )
 			{
@@ -1217,6 +1287,14 @@ public:
 			int totalPairCount = edgeCountA * edgeCountB;
 			DrawTextLine( "edges kept: A %d of %d, B %d of %d", m_keptEdgeCountA, edgeCountA, m_keptEdgeCountB, edgeCountB );
 			DrawTextLine( "edge pairs: %d of %d (%.1f%%)", pairCount, totalPairCount, 100.0f * pairCount / totalPairCount );
+
+			if ( m_usePlaneBound )
+			{
+				int centerPairCount = m_centerKeptEdgeCountA * m_centerKeptEdgeCountB;
+				DrawTextLine( "center bound: A %d, B %d, edge pairs %d (%.1f%%), magenta edges culled by plane bound only",
+							  m_centerKeptEdgeCountA, m_centerKeptEdgeCountB, centerPairCount,
+							  100.0f * centerPairCount / totalPairCount );
+			}
 		}
 
 		DrawTextLine( "SAT type: %d", m_satCache.type );
@@ -1239,6 +1317,8 @@ public:
 	int m_seedB;
 	int m_keptEdgeCountA;
 	int m_keptEdgeCountB;
+	int m_centerKeptEdgeCountA;
+	int m_centerKeptEdgeCountB;
 	float m_separationA;
 	float m_separationB;
 	float m_gap;
@@ -1250,6 +1330,7 @@ public:
 	bool m_showSpheres;
 	bool m_showCulled;
 	bool m_showNormals;
+	bool m_usePlaneBound;
 };
 
 static int sampleHullCulling = RegisterSample( "Manifold", "Hull Culling", HullCulling::Create );
