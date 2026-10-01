@@ -1354,91 +1354,11 @@ static inline void b3GetFaceDots( const b3HullData* hull, b3Vec3 d, float* dots 
 
 #define B3_PARALLEL_TOL 1e-4f
 
-// A hull edge is bounded by two face normals. On the Gauss map the edge becomes an arc between
-// those two face normals. An edge can only build the best separating axis if a normal on that arc
-// can beat the best separation value seen so far. This function determines if the upper bound
-// separation on that arc can possibly beat the current maximum face separation.
-//
-// This follows the upper bound used for hull faces:
-// separation_upper_bound = dot(axis, centerB - centerA) - innerRadiusA - innerRadiusB
-//
-// Inputs:
-// d the vector connecting the hull centers
-// a1 = dot(n1, d)
-// a2 = dot(n2, d)
-// c = dot(n1, n2)
-// bound = maxFaceSeparation + radiusBound
-//
-// This returns 1 if the edge is a candidate and 0 otherwise.
-static inline int b3TestEdgeCandidate( float a1, float a2, float c, float bound )
-{
-	// c = cos(theta), the angle between the normals.
-	// s = sin(theta)^2 >= 0
-	float s = 1.0f - c * c;
-
-	// This is coincidentally the law of cosines. Break out your protractor.
-	float t = a1 * a1 + a2 * a2 - 2.0f * a1 * a2 * c;
-
-	// Exterior conditions:
-	// Can either face normal beat the best separation? These cover the case where
-	// d is outside the arc. Note that d pointing outside the arc does not cull this
-	// edge. It can still generate the maximum separation (happens commonly).
-	// Note: when earlyReturn == false, bound == -INFINITY and this is always true.
-	int exterior = b3MaxFloat( a1, a2 ) >= bound;
-
-	// Project d into the plane that holds both n1 and n2, call that vector w.
-	// Introduce the coordinates b1 and b2 (these have units of length).
-	//
-	// w = b1*n1 + b2*n2
-	//
-	// Since w is the projection of d into the plane of cross(n1, n2):
-	// dot(n1, w) == dot(n1, d) == a1
-	// dot(n2, w) == dot(n2, d) == a2
-	//
-	// Dot the equation with n1 and n2:
-	// a1 = b1 + b2*c
-	// a2 = b1*c + b2
-	//
-	// Solve for b1 and b2 using Cramer's Rule
-	// b1 = (a1 - a2 * c) / s
-	// b2 = (a2 - a1 * c) / s
-	//
-	// s = 1 - c * c is positive, so b1 and b2 must be positive for d to live in
-	// the arc between n1 and n2.
-	//
-	// The peak value in the direction of d is norm(w):
-	// dot(w, w) = dot(b1*n1 + b2*n2, d)
-	//           = b1*a1 + b2*a2
-	//           = (a1*a1 - a1*a2*c + a2*a2 - a1*a2*c) / s
-	//           = (a1*a1 + a2*a2 - 2*a1*a2*c) / s
-	//           = t / s
-	//
-	// The interior is a candidate if:
-	// norm(w) >= bound
-	// sqrt(t / s) >= bound
-	// If bound < 0 this is always true. Otherwise
-	// t > bound^2 * s
-	//
-	// Interior conditions:
-	// b1 and b2 positive (interior arc): a1 >= c * a2 & a2 >= c * a1
-	// bound <= 0.0: the interior arc is automatically a candidate because it is positive
-	// s < B3_PARALLEL_TOL : n1 and n2 are nearly parallel so give up and pass the edge to the next stage
-	// t >= bound * bound * s : bound is positive and the interior normal direction is a candidate
-	//
-	// Using bit ops here to avoid branches.
-
-	int interior =
-		( a1 >= c * a2 ) & ( a2 >= c * a1 ) & ( ( bound <= 0.0f ) | ( s < B3_PARALLEL_TOL ) | ( t >= bound * bound * s ) );
-
-	return exterior | interior;
-}
-
-// todo edge candidate test experiment: 0 = b3TestEdgeCandidate, 1 = b3TestEdgeCandidateSorted, 2 = b3TestEdgeCandidatePlane, 3 = plane inputs with b3TestEdgeCandidateSorted
-#ifndef B3_EDGE_CANDIDATE_MODE
-#define B3_EDGE_CANDIDATE_MODE 0
-#endif
-
-// todo from Cairn Overturf, see https://gist.github.com/cairnc/dee7a2866da0709f2d9a77b6493b57b5
+// Inscribed sphere edge test. https://box2d.org/posts/2026/09/inscribed-spheres/
+// The implementation here is a mix of the versions from Cairn Overturf and Dirk Gregorius:
+// https://gist.github.com/cairnc/dee7a2866da0709f2d9a77b6493b57b5
+// https://gist.github.com/dgregorius/e6751b5c00937cd21af63cba3c53c861
+// This benchmarks faster than the version from the blog post.
 static inline int b3TestEdgeCandidateSorted( float a1, float a2, float c, float bound )
 {
 	float hi = b3MaxFloat( a1, a2 );
@@ -1462,32 +1382,7 @@ static inline int b3TestEdgeCandidateSorted( float a1, float a2, float c, float 
 	return exterior | interior;
 }
 
-// todo from Dirk Gregorius, see https://gist.github.com/dgregorius/e6751b5c00937cd21af63cba3c53c861
-// d1 = dot(n1, otherCenter - p), d2 = dot(n2, otherCenter - p), where p is a point on the edge
-// b = dot(n1, n2)
-// threshold = maxFaceSeparation + otherInnerRadius
-static inline int b3TestEdgeCandidatePlane( float d1, float d2, float b, float threshold )
-{
-	float det = 1.0f - b * b;
-	if ( det < 1000.0f * FLT_EPSILON )
-	{
-		return 1;
-	}
-
-	float n1 = d1 - b * d2;
-	float n2 = d2 - b * d1;
-	if ( n1 >= 0.0f && n2 >= 0.0f )
-	{
-		float x1 = n1 / det;
-		float x2 = n2 / det;
-		return threshold < 0.0f || x1 * d1 + x2 * d2 > threshold * threshold;
-	}
-
-	return b3MaxFloat( d1, d2 ) > threshold;
-}
-
-#if B3_EDGE_CANDIDATE_MODE >= 2
-// todo dot(n, otherCenter) - offset for all faces of the hull, padded to the SIMD width.
+// dot(n, otherCenter) - offset for all faces of the hull, padded to the SIMD width.
 static inline void b3GetFacePlaneSeparations( const b3HullData* hull, b3Vec3 otherCenter, float* separations )
 {
 	b3GetFaceDots( hull, otherCenter, separations );
@@ -1499,7 +1394,6 @@ static inline void b3GetFacePlaneSeparations( const b3HullData* hull, b3Vec3 oth
 		separations[i] -= planes[i].offset;
 	}
 }
-#endif
 
 // Temporary abbreviations for convenience.
 #define NE ( B3_MAX_HULL_EDGES + B3_SIMD_WIDTH )
@@ -1704,10 +1598,6 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 	_Static_assert( ( B3_MAX_HULL_FACES & ( B3_SIMD_WIDTH - 1 ) ) == 0, "must be multiple of SIMD width" );
 	_Static_assert( ( B3_MAX_HULL_VERTICES & ( B3_SIMD_WIDTH - 1 ) ) == 0, "must be multiple of SIMD width" );
 
-	// Bound to skip edge tests. Derived from:
-	// dot(edgeNormal, deltaCenter) - radiusBound > maxSep
-	float edgeBound = earlyReturn ? b3MaxFloat( res.faceA.separation, res.faceB.separation ) + radiusBound : -INFINITY;
-
 	B3_VALIDATE( earlyReturn == false || centerDistance >= edgeBound );
 
 	// Gather edges of A that can feasibly create a separating axis that beats the maximum face separation.
@@ -1721,7 +1611,6 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 	int edgeIndicesB[B3_MAX_HULL_EDGES];
 	int nb = 0;
 
-#if B3_EDGE_CANDIDATE_MODE >= 2
 	float maxFaceSeparation = b3MaxFloat( res.faceA.separation, res.faceB.separation );
 	float boundSlack = radius - radiusBound;
 	float thresholdA = earlyReturn ? maxFaceSeparation + hullB->innerRadius - boundSlack : -INFINITY;
@@ -1741,11 +1630,7 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 		int i2 = halfEdgesA[i + 1].face;
 		float c = b3Dot( planesA[i1].normal, planesA[i2].normal );
 		edgeIndicesA[na] = i;
-#if B3_EDGE_CANDIDATE_MODE == 3
 		na += b3TestEdgeCandidateSorted( planeDotA[i1], planeDotA[i2], c, thresholdA );
-#else
-		na += b3TestEdgeCandidatePlane( planeDotA[i1], planeDotA[i2], c, thresholdA );
-#endif
 	}
 
 	for ( int i = 0; i < halfEdgeCountB; i += 2 )
@@ -1754,40 +1639,8 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 		int i2 = halfEdgesB[i + 1].face;
 		float c = b3Dot( planesB[i1].normal, planesB[i2].normal );
 		edgeIndicesB[nb] = i;
-#if B3_EDGE_CANDIDATE_MODE == 3
 		nb += b3TestEdgeCandidateSorted( planeDotB[i1], planeDotB[i2], c, thresholdB );
-#else
-		nb += b3TestEdgeCandidatePlane( planeDotB[i1], planeDotB[i2], c, thresholdB );
-#endif
 	}
-#else
-	for ( int i = 0; i < halfEdgeCountA; i += 2 )
-	{
-		int i1 = halfEdgesA[i].face;
-		int i2 = halfEdgesA[i + 1].face;
-		float c = b3Dot( planesA[i1].normal, planesA[i2].normal );
-		edgeIndicesA[na] = i;
-#if B3_EDGE_CANDIDATE_MODE == 1
-		na += b3TestEdgeCandidateSorted( dotA[i1], dotA[i2], c, edgeBound );
-#else
-		na += b3TestEdgeCandidate( dotA[i1], dotA[i2], c, edgeBound );
-#endif
-	}
-
-	// Similar for edges of B.
-	for ( int i = 0; i < halfEdgeCountB; i += 2 )
-	{
-		int i1 = halfEdgesB[i].face;
-		int i2 = halfEdgesB[i + 1].face;
-		float c = b3Dot( planesB[i1].normal, planesB[i2].normal );
-		edgeIndicesB[nb] = i;
-#if B3_EDGE_CANDIDATE_MODE == 1
-		nb += b3TestEdgeCandidateSorted( dotB[i1], dotB[i2], c, edgeBound );
-#else
-		nb += b3TestEdgeCandidate( dotB[i1], dotB[i2], c, edgeBound );
-#endif
-	}
-#endif
 
 	if ( na == 0 || nb == 0 )
 	{
