@@ -10,6 +10,7 @@
 #include "box3d/collision.h"
 #include "box3d/constants.h"
 
+#include <float.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -1432,6 +1433,74 @@ static inline int b3TestEdgeCandidate( float a1, float a2, float c, float bound 
 	return exterior | interior;
 }
 
+// todo edge candidate test experiment: 0 = b3TestEdgeCandidate, 1 = b3TestEdgeCandidateSorted, 2 = b3TestEdgeCandidatePlane, 3 = plane inputs with b3TestEdgeCandidateSorted
+#ifndef B3_EDGE_CANDIDATE_MODE
+#define B3_EDGE_CANDIDATE_MODE 0
+#endif
+
+// todo from Cairn Overturf, see https://gist.github.com/cairnc/dee7a2866da0709f2d9a77b6493b57b5
+static inline int b3TestEdgeCandidateSorted( float a1, float a2, float c, float bound )
+{
+	float hi = b3MaxFloat( a1, a2 );
+	float lo = b3MinFloat( a1, a2 );
+
+	int exterior = hi >= bound;
+
+	float u = lo - c * hi;
+	int maxIsInterior = u >= 0.0f;
+
+	float s = 1.0f - c * c;
+	float boundTerm = ( bound - hi ) * ( bound + hi );
+	float lhs = u * u;
+	float rhs = boundTerm * s;
+
+	int maxBeatsBound = lhs >= rhs;
+	int nearlyParallel = s < B3_PARALLEL_TOL;
+
+	int interior = maxIsInterior & ( maxBeatsBound | nearlyParallel );
+
+	return exterior | interior;
+}
+
+// todo from Dirk Gregorius, see https://gist.github.com/dgregorius/e6751b5c00937cd21af63cba3c53c861
+// d1 = dot(n1, otherCenter - p), d2 = dot(n2, otherCenter - p), where p is a point on the edge
+// b = dot(n1, n2)
+// threshold = maxFaceSeparation + otherInnerRadius
+static inline int b3TestEdgeCandidatePlane( float d1, float d2, float b, float threshold )
+{
+	float det = 1.0f - b * b;
+	if ( det < 1000.0f * FLT_EPSILON )
+	{
+		return 1;
+	}
+
+	float n1 = d1 - b * d2;
+	float n2 = d2 - b * d1;
+	if ( n1 >= 0.0f && n2 >= 0.0f )
+	{
+		float x1 = n1 / det;
+		float x2 = n2 / det;
+		return threshold < 0.0f || x1 * d1 + x2 * d2 > threshold * threshold;
+	}
+
+	return b3MaxFloat( d1, d2 ) > threshold;
+}
+
+#if B3_EDGE_CANDIDATE_MODE >= 2
+// todo dot(n, otherCenter) - offset for all faces of the hull, padded to the SIMD width.
+static inline void b3GetFacePlaneSeparations( const b3HullData* hull, b3Vec3 otherCenter, float* separations )
+{
+	b3GetFaceDots( hull, otherCenter, separations );
+
+	const b3Plane* planes = b3GetHullPlanes( hull );
+	int faceCount = hull->faceCount;
+	for ( int i = 0; i < faceCount; ++i )
+	{
+		separations[i] -= planes[i].offset;
+	}
+}
+#endif
+
 // Temporary abbreviations for convenience.
 #define NE ( B3_MAX_HULL_EDGES + B3_SIMD_WIDTH )
 #define NF ( B3_MAX_HULL_FACES + B3_SIMD_WIDTH )
@@ -1646,28 +1715,79 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 	const b3HullHalfEdge* halfEdgesA = b3GetHullEdges( hullA );
 	int edgeIndicesA[NE];
 	int na = 0;
+
+	int halfEdgeCountB = hullB->edgeCount;
+	const b3HullHalfEdge* halfEdgesB = b3GetHullEdges( hullB );
+	int edgeIndicesB[B3_MAX_HULL_EDGES];
+	int nb = 0;
+
+#if B3_EDGE_CANDIDATE_MODE >= 2
+	float maxFaceSeparation = b3MaxFloat( res.faceA.separation, res.faceB.separation );
+	float boundSlack = radius - radiusBound;
+	float thresholdA = earlyReturn ? maxFaceSeparation + hullB->innerRadius - boundSlack : -INFINITY;
+	float thresholdB = earlyReturn ? maxFaceSeparation + hullA->innerRadius - boundSlack : -INFINITY;
+
+	b3Vec3 centerBinA = b3Add( b3MulMV( R, hullB->center ), xfB.p );
+	b3Vec3 centerAinB = b3MulMV( invR, b3Sub( hullA->center, xfB.p ) );
+
+	_Alignas( 16 ) float planeDotA[NF];
+	_Alignas( 16 ) float planeDotB[NF];
+	b3GetFacePlaneSeparations( hullA, centerBinA, planeDotA );
+	b3GetFacePlaneSeparations( hullB, centerAinB, planeDotB );
+
 	for ( int i = 0; i < halfEdgeCountA; i += 2 )
 	{
 		int i1 = halfEdgesA[i].face;
 		int i2 = halfEdgesA[i + 1].face;
 		float c = b3Dot( planesA[i1].normal, planesA[i2].normal );
 		edgeIndicesA[na] = i;
-		na += b3TestEdgeCandidate( dotA[i1], dotA[i2], c, edgeBound );
+#if B3_EDGE_CANDIDATE_MODE == 3
+		na += b3TestEdgeCandidateSorted( planeDotA[i1], planeDotA[i2], c, thresholdA );
+#else
+		na += b3TestEdgeCandidatePlane( planeDotA[i1], planeDotA[i2], c, thresholdA );
+#endif
 	}
 
-	// Similar for edges of B.
-	int halfEdgeCountB = hullB->edgeCount;
-	const b3HullHalfEdge* halfEdgesB = b3GetHullEdges( hullB );
-	int edgeIndicesB[B3_MAX_HULL_EDGES];
-	int nb = 0;
 	for ( int i = 0; i < halfEdgeCountB; i += 2 )
 	{
 		int i1 = halfEdgesB[i].face;
 		int i2 = halfEdgesB[i + 1].face;
 		float c = b3Dot( planesB[i1].normal, planesB[i2].normal );
 		edgeIndicesB[nb] = i;
-		nb += b3TestEdgeCandidate( dotB[i1], dotB[i2], c, edgeBound );
+#if B3_EDGE_CANDIDATE_MODE == 3
+		nb += b3TestEdgeCandidateSorted( planeDotB[i1], planeDotB[i2], c, thresholdB );
+#else
+		nb += b3TestEdgeCandidatePlane( planeDotB[i1], planeDotB[i2], c, thresholdB );
+#endif
 	}
+#else
+	for ( int i = 0; i < halfEdgeCountA; i += 2 )
+	{
+		int i1 = halfEdgesA[i].face;
+		int i2 = halfEdgesA[i + 1].face;
+		float c = b3Dot( planesA[i1].normal, planesA[i2].normal );
+		edgeIndicesA[na] = i;
+#if B3_EDGE_CANDIDATE_MODE == 1
+		na += b3TestEdgeCandidateSorted( dotA[i1], dotA[i2], c, edgeBound );
+#else
+		na += b3TestEdgeCandidate( dotA[i1], dotA[i2], c, edgeBound );
+#endif
+	}
+
+	// Similar for edges of B.
+	for ( int i = 0; i < halfEdgeCountB; i += 2 )
+	{
+		int i1 = halfEdgesB[i].face;
+		int i2 = halfEdgesB[i + 1].face;
+		float c = b3Dot( planesB[i1].normal, planesB[i2].normal );
+		edgeIndicesB[nb] = i;
+#if B3_EDGE_CANDIDATE_MODE == 1
+		nb += b3TestEdgeCandidateSorted( dotB[i1], dotB[i2], c, edgeBound );
+#else
+		nb += b3TestEdgeCandidate( dotB[i1], dotB[i2], c, edgeBound );
+#endif
+	}
+#endif
 
 	if ( na == 0 || nb == 0 )
 	{
