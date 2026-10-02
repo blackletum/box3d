@@ -2019,7 +2019,7 @@ typedef struct b3HullFace
 } b3HullFace;
 
 /// 64-bit hull version. Useful for validating serialized data.
-#define B3_HULL_VERSION 0x4A4C9587DE57485Cull
+#define B3_HULL_VERSION 0x9D3E61B7C2A4F085ull
 
 /// A convex hull.
 /// @note This data structure has data hanging off the end and cannot be directly copied.
@@ -2043,7 +2043,7 @@ typedef struct b3HullData
 	/// The radius of the largest sphere at the center.
 	float innerRadius;
 
-	/// The local centroid
+	/// The local centroid.
 	b3Vec3 center;
 
 	/// The inertia tensor about the centroid.
@@ -2058,7 +2058,7 @@ typedef struct b3HullData
 	/// Offset of the point array in bytes from the struct address.
 	int32_t pointOffset;
 
-	/// This is the half-edge count (double the edge count)
+	/// This is the half-edge count (double the edge count).
 	int32_t edgeCount;
 
 	/// Offset of the edge array in bytes from the struct address.
@@ -2073,14 +2073,20 @@ typedef struct b3HullData
 	/// Offset of the face array in bytes from the struct address.
 	int32_t faceOffset;
 
-	/// Offset of structure of array (SOA) vertices
+	/// Offset of structure of array (SOA) vertices.
 	int32_t soaVertexOffset;
 
-	/// Offset of structure of array (SOA) unit normal vectors
+	/// Offset of structure of array (SOA) unit normal vectors.
 	int32_t soaNormalOffset;
+
+	/// Offset of dot(n1, n2) for each full edge.
+	int32_t edgeCosineOffset;
 
 	/// The total number of bytes for this hull.
 	int32_t byteCount;
+
+	/// Explicit padding for determinism.
+	int32_t padding;
 
 	/// Any padding must be explicit.
 } b3HullData;
@@ -2102,6 +2108,7 @@ typedef struct b3BoxHull
 	float nx[8];				 ///< normal x, padded to multiple of 4
 	float ny[8];				 ///< normal y, padded to multiple of 4
 	float nz[8];				 ///< normal z, padded to multiple of 4
+	float edgeCosines[12];		 ///< dot(n1, n2) for each full edge.
 } b3BoxHull;
 
 /**@}*/ // hull

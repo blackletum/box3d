@@ -1448,6 +1448,30 @@ static inline void b3GetFacePlaneSeparations( const b3HullData* hull, b3Vec3 oth
 	}
 }
 
+// The number of edge pair tests needed to make the extra culling pass worthwhile.
+#define B3_EDGE_PROBE_MIN_TESTS 10
+
+// Re-test edge candidates against the plane separations of a probe point on the other hull
+static inline int b3FilterEdgeCandidates( const b3HullData* hull, const float* planeSeparations, float bound, int* edgeIndices,
+										  int count )
+{
+	const b3HullHalfEdge* halfEdges = b3GetHullEdges( hull );
+	const float* cosines = b3GetHullEdgeCosines( hull );
+	int keptCount = 0;
+
+	for ( int k = 0; k < count; ++k )
+	{
+		int i = edgeIndices[k];
+		int i1 = halfEdges[i].face;
+		int i2 = halfEdges[i + 1].face;
+		float c = cosines[i >> 1];
+		edgeIndices[keptCount] = i;
+		keptCount += b3TestEdgeCandidateSorted( planeSeparations[i1], planeSeparations[i2], c, bound );
+	}
+
+	return keptCount;
+}
+
 // Temporary abbreviations for convenience.
 #define NE ( B3_MAX_HULL_EDGES + B3_SIMD_WIDTH )
 #define NF ( B3_MAX_HULL_FACES + B3_SIMD_WIDTH )
@@ -1534,15 +1558,16 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 
 	// Use the seed to get a lower bound on the separation for the faces of hullA.
 	float floorA = -INFINITY;
+	float seedSeparationA = -INFINITY;
+	int seedVertexB = 0;
 	if ( earlyReturn )
 	{
 		b3Plane plane = planesA[seedIndexA];
 		b3Vec3 direction = b3Neg( b3MulMV( invR, plane.normal ) );
 		float planeSeparation = b3Dot( plane.normal, xfB.p ) - plane.offset;
-		int vertexIndex;
-		float separation =
-			b3GetFaceSeparation( direction, planeSeparation, vxB, vyB, vzB, soaVertexCountB, cB, hB, &vertexIndex );
-		floorA = b3MinFloat( separation, speculativeDistance );
+		seedSeparationA =
+			b3GetFaceSeparation( direction, planeSeparation, vxB, vyB, vzB, soaVertexCountB, cB, hB, &seedVertexB );
+		floorA = b3MinFloat( seedSeparationA, speculativeDistance );
 	}
 
 	// Test A's face planes against B's vertices.
@@ -1555,11 +1580,18 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 		}
 
 		b3Plane plane = planesA[i];
-		b3Vec3 direction = b3Neg( b3MulMV( invR, plane.normal ) );
-		float planeSeparation = b3Dot( plane.normal, xfB.p ) - plane.offset;
-		int vertexIndex;
-		float separation =
-			b3GetFaceSeparation( direction, planeSeparation, vxB, vyB, vzB, soaVertexCountB, cB, hB, &vertexIndex );
+		int vertexIndex = seedVertexB;
+		float separation = seedSeparationA;
+
+		// Avoid recomputing the seed face separation.
+		if ( earlyReturn == false || i != seedIndexA )
+		{
+			b3Vec3 direction = b3Neg( b3MulMV( invR, plane.normal ) );
+			float planeSeparation = b3Dot( plane.normal, xfB.p ) - plane.offset;
+			separation =
+				b3GetFaceSeparation( direction, planeSeparation, vxB, vyB, vzB, soaVertexCountB, cB, hB, &vertexIndex );
+		}
+
 		if ( separation > res.faceA.separation )
 		{
 			res.faceA.normal = plane.normal;
@@ -1604,17 +1636,18 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 
 	// Get a lower bound on the separation for the faces of hullB.
 	float floorB = -INFINITY;
+	float seedSeparationB = -INFINITY;
+	int seedVertexA = 0;
 	if ( earlyReturn )
 	{
 		b3Plane plane = planesB[seedIndexB];
 		b3Vec3 direction = b3Neg( b3MulMV( R, plane.normal ) );
 		float planeSeparation = b3Dot( direction, xfB.p ) - plane.offset;
-		int vertexIndex;
-		float separation =
-			b3GetFaceSeparation( direction, planeSeparation, vxA, vyA, vzA, soaVertexCountA, cA, hA, &vertexIndex );
+		seedSeparationB =
+			b3GetFaceSeparation( direction, planeSeparation, vxA, vyA, vzA, soaVertexCountA, cA, hA, &seedVertexA );
 
 		// Include the floor set by hull A faces.
-		floorB = b3MaxFloat( separation, res.faceA.separation );
+		floorB = b3MaxFloat( seedSeparationB, res.faceA.separation );
 		floorB = b3MinFloat( floorB, speculativeDistance );
 	}
 
@@ -1628,10 +1661,17 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 
 		b3Plane plane = planesB[i];
 		b3Vec3 direction = b3Neg( b3MulMV( R, plane.normal ) );
-		float planeSeparation = b3Dot( direction, xfB.p ) - plane.offset;
-		int vertexIndex;
-		float separation =
-			b3GetFaceSeparation( direction, planeSeparation, vxA, vyA, vzA, soaVertexCountA, cA, hA, &vertexIndex );
+		int vertexIndex = seedVertexA;
+		float separation = seedSeparationB;
+
+		// Avoid recomputing the seed face separation.
+		if ( earlyReturn == false || i != seedIndexB )
+		{
+			float planeSeparation = b3Dot( direction, xfB.p ) - plane.offset;
+			separation =
+				b3GetFaceSeparation( direction, planeSeparation, vxA, vyA, vzA, soaVertexCountA, cA, hA, &vertexIndex );
+		}
+
 		if ( separation > res.faceB.separation )
 		{
 			res.faceB.normal = direction;
@@ -1651,7 +1691,8 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 	_Static_assert( ( B3_MAX_HULL_FACES & ( B3_SIMD_WIDTH - 1 ) ) == 0, "must be multiple of SIMD width" );
 	_Static_assert( ( B3_MAX_HULL_VERTICES & ( B3_SIMD_WIDTH - 1 ) ) == 0, "must be multiple of SIMD width" );
 
-	B3_VALIDATE( earlyReturn == false || centerDistance >= edgeBound );
+	B3_VALIDATE( earlyReturn == false ||
+				 centerDistance >= b3MaxFloat( res.faceA.separation, res.faceB.separation ) + radiusBound );
 
 	// Gather edges of A that can feasibly create a separating axis that beats the maximum face separation.
 	int halfEdgeCountA = hullA->edgeCount;
@@ -1677,11 +1718,14 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 	b3GetFacePlaneSeparations( hullA, centerBinA, planeDotA );
 	b3GetFacePlaneSeparations( hullB, centerAinB, planeDotB );
 
+	const float* cosinesA = b3GetHullEdgeCosines( hullA );
+	const float* cosinesB = b3GetHullEdgeCosines( hullB );
+
 	for ( int i = 0; i < halfEdgeCountA; i += 2 )
 	{
 		int i1 = halfEdgesA[i].face;
 		int i2 = halfEdgesA[i + 1].face;
-		float c = b3Dot( planesA[i1].normal, planesA[i2].normal );
+		float c = cosinesA[i >> 1];
 		edgeIndicesA[na] = i;
 		na += b3TestEdgeCandidateSorted( planeDotA[i1], planeDotA[i2], c, thresholdA );
 	}
@@ -1690,9 +1734,27 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 	{
 		int i1 = halfEdgesB[i].face;
 		int i2 = halfEdgesB[i + 1].face;
-		float c = b3Dot( planesB[i1].normal, planesB[i2].normal );
+		float c = cosinesB[i >> 1];
 		edgeIndicesB[nb] = i;
 		nb += b3TestEdgeCandidateSorted( planeDotB[i1], planeDotB[i2], c, thresholdB );
+	}
+
+	// The support vertices of the best faces are points on the other hull, so an edge pair axis cannot
+	// have a larger separation than the plane separation of these points over the arc of the edge. This culls many
+	// of the edges that survive the inscribed sphere bound. The slack only needs to cover round-off.
+	if ( earlyReturn && nb * ( ( na + 3 ) >> 2 ) >= B3_EDGE_PROBE_MIN_TESTS )
+	{
+		float probeBound = maxFaceSeparation - ( 0.1f * B3_LINEAR_SLOP + 0.001f * b3AbsFloat( centerDistance + radius ) );
+
+		int vertexB = res.faceA.indexB != B3_NULL_INDEX ? res.faceA.indexB : seedVertexB;
+		b3Vec3 probeB = { vxB[vertexB], vyB[vertexB], vzB[vertexB] };
+		b3GetFacePlaneSeparations( hullA, b3Add( b3MulMV( R, probeB ), xfB.p ), planeDotA );
+		na = b3FilterEdgeCandidates( hullA, planeDotA, probeBound, edgeIndicesA, na );
+
+		int vertexA = res.faceB.indexA != B3_NULL_INDEX ? res.faceB.indexA : seedVertexA;
+		b3Vec3 probeA = { vxA[vertexA], vyA[vertexA], vzA[vertexA] };
+		b3GetFacePlaneSeparations( hullB, b3MulMV( invR, b3Sub( probeA, xfB.p ) ), planeDotB );
+		nb = b3FilterEdgeCandidates( hullB, planeDotB, probeBound, edgeIndicesB, nb );
 	}
 
 	if ( na == 0 || nb == 0 )

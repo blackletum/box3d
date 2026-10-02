@@ -212,6 +212,17 @@ B3_INLINE const float* b3GetHullSoaNormals( const b3HullData* hull )
 	return (const float*)( (intptr_t)hull + hull->soaNormalOffset );
 }
 
+/// Get the dot products of the two adjacent face normals for each full edge.
+B3_INLINE const float* b3GetHullEdgeCosines( const b3HullData* hull )
+{
+	if ( hull->edgeCosineOffset == 0 )
+	{
+		return NULL;
+	}
+
+	return (const float*)( (intptr_t)hull + hull->edgeCosineOffset );
+}
+
 /// Create a tessellated cylinder as a hull.
 B3_API b3HullData* b3CreateCylinder( float height, float radius, float yOffset, int sides );
 
