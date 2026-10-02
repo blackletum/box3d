@@ -1361,20 +1361,73 @@ static inline void b3GetFaceDots( const b3HullData* hull, b3Vec3 d, float* dots 
 // This benchmarks faster than the version from the blog post.
 static inline int b3TestEdgeCandidateSorted( float a1, float a2, float c, float bound )
 {
+	// We want to maximize
+	//
+	//   f(t) = dot(d, nlerp(n1, n2, t))
+	//
+	// over t in [0, 1], where
+	//
+	//   a1 = dot(n1, d)
+	//   a2 = dot(n2, d)
+	//   c  = dot(n1, n2).
+	//
+	// The maximum can occur either at an endpoint or at an interior
+	// critical point where f'(t) = 0.
+
+	// Since the endpoint values are a1 and a2, only the larger endpoint
+	// needs to be tested against the bound.
 	float hi = b3MaxFloat( a1, a2 );
 	float lo = b3MinFloat( a1, a2 );
-
 	int exterior = hi >= bound;
 
+	// Differentiating f(t) gives
+	//
+	//           a2 - c*a1 - (1 - c)*(a1 + a2)*t
+	//   f'(t) = --------------------------------------
+	//           ((1 - t)^2 + t^2 + 2*c*t*(1 - t))^(3/2)
+	//
+	// The denominator is positive and the numerator is linear in t.
+	// An interior maximum therefore requires
+	//
+	//   f'(0) >= 0  ->  a2 >= c*a1
+	//   f'(1) <= 0  ->  a1 >= c*a2.
+	//
+	// After sorting these become
+	//
+	//   hi >= c*lo
+	//   lo >= c*hi.
+	//
+	// The second is always the stricter condition since
+	//
+	//   (hi - c*lo) - (lo - c*hi)
+	//       = (1 + c)*(hi - lo) >= 0.
+	//
+	// Thus both conditions reduce to u >= 0.
 	float u = lo - c * hi;
 	int maxIsInterior = u >= 0.0f;
 
+	// Solving f'(t) = 0 and evaluating f(t) at tmax gives
+	//
+	//   f(tmax)^2 =
+	//       (a1^2 + a2^2 - 2*c*a1*a2) / (1 - c^2).
+	//
+	// After sorting,
+	//
+	//   hi^2 + lo^2 - 2*c*hi*lo
+	//       = hi^2*(1 - c^2) + u^2.
+	//
+	// Let s = 1 - c^2 and rearrange f(tmax) >= bound:
+	//
+	//   u^2 >= (bound^2 - hi^2)*s.
 	float s = 1.0f - c * c;
 	float boundTerm = ( bound - hi ) * ( bound + hi );
 	float lhs = u * u;
 	float rhs = boundTerm * s;
-
 	int maxBeatsBound = lhs >= rhs;
+
+	// The interior expression contains 1 - c^2 in its denominator.
+	// When this approaches zero the arc is degenerate or ill-conditioned,
+	// so conservatively keep the edge as a candidate.
 	int nearlyParallel = s < B3_PARALLEL_TOL;
 
 	int interior = maxIsInterior & ( maxBeatsBound | nearlyParallel );

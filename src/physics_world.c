@@ -599,9 +599,6 @@ static void b3CollideTask( int startIndex, int endIndex, int workerIndex, void* 
 	float speculativeDistance = B3_SPECULATIVE_DISTANCE;
 	float recycleDistanceNonTouching = b3MinFloat( recycleDistance, speculativeDistance );
 
-	// Prefetch contact[i + contactPrefetchDistance] each iteration so the random
-	// 216 B contact load lands in L1 by the time we reach it. Distance picked to
-	// cover ~200 cycles of memory latency without overshooting the L1 working set.
 	const int contactPrefetchDistance = 4;
 	int prefetchEnd = endIndex - contactPrefetchDistance;
 
