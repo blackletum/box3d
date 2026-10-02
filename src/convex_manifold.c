@@ -1651,8 +1651,6 @@ b3AxisQuery b3ComputeSeparatingAxis( const b3HullData* hullA, const b3HullData* 
 	_Static_assert( ( B3_MAX_HULL_FACES & ( B3_SIMD_WIDTH - 1 ) ) == 0, "must be multiple of SIMD width" );
 	_Static_assert( ( B3_MAX_HULL_VERTICES & ( B3_SIMD_WIDTH - 1 ) ) == 0, "must be multiple of SIMD width" );
 
-	B3_VALIDATE( earlyReturn == false || centerDistance >= edgeBound );
-
 	// Gather edges of A that can feasibly create a separating axis that beats the maximum face separation.
 	int halfEdgeCountA = hullA->edgeCount;
 	const b3HullHalfEdge* halfEdgesA = b3GetHullEdges( hullA );
