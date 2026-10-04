@@ -3,6 +3,7 @@
 
 #include "solver.h"
 
+#include "aabb.h"
 #include "arena_allocator.h"
 #include "bitset.h"
 #include "body.h"
@@ -469,6 +470,38 @@ static bool b3ContinuousQueryCallback( int proxyId, uint64_t userData, void* con
 	return true;
 }
 
+static bool b3IsShapeFast( const b3Shape* shape, b3Vec3 centroid1, b3Vec3 centroid2, float rotationChord, float safetyFactor )
+{
+	float minExtent;
+	float radius;
+	switch ( shape->type )
+	{
+		case b3_sphereShape:
+			minExtent = shape->sphere.radius;
+			radius = shape->sphere.radius;
+			break;
+
+		case b3_capsuleShape:
+			minExtent = shape->capsule.radius;
+			radius = 0.5f * b3Distance( shape->capsule.center1, shape->capsule.center2 ) + shape->capsule.radius;
+			break;
+
+		case b3_hullShape:
+		{
+			b3Vec3 farthestPoint = b3FarthestPointOnAABB( shape->hull->aabb, shape->localCentroid );
+			minExtent = shape->hull->innerRadius;
+			radius = b3Distance( farthestPoint, shape->localCentroid );
+		}
+		break;
+
+		default:
+			return true;
+	}
+
+	float maxMotion = b3Distance( centroid1, centroid2 ) + rotationChord * radius;
+	return maxMotion > safetyFactor * minExtent;
+}
+
 // Continuous collision of dynamic versus static
 static void b3SolveContinuous( b3World* world, int bodySimIndex, b3TaskContext* taskContext, float dt )
 {
@@ -506,6 +539,8 @@ static void b3SolveContinuous( b3World* world, int bodySimIndex, b3TaskContext* 
 	context.fraction = 1.0f;
 
 	bool isBullet = ( fastBodySim->flags & b3_isBullet ) != 0;
+	float safetyFactor = fastBody->safetyFactor;
+	float rotationChord = 2.0f * b3Length( b3InvMulQuat( sweep.q1, sweep.q2 ).v );
 
 	int shapeId = fastBody->headShapeId;
 	while ( shapeId != B3_NULL_INDEX )
@@ -534,6 +569,15 @@ static void b3SolveContinuous( b3World* world, int bodySimIndex, b3TaskContext* 
 		if ( fastShape->sensorIndex != B3_NULL_INDEX )
 		{
 			continue;
+		}
+
+		if ( isBullet == false )
+		{
+			bool isShapeFast = b3IsShapeFast( fastShape, context.centroid1, context.centroid2, rotationChord, safetyFactor );
+			if ( isShapeFast == false )
+			{
+				continue;
+			}
 		}
 
 		b3AABB sweptBox = b3AABB_Union( box1, box2 );
@@ -1882,7 +1926,7 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 		b3ValidateNoMoved( &world->broadPhase );
 
 		// Finalize bodies. Must happen after the constraint solver and after island splitting.
-		b3ParallelFor( world, &b3FinalizeBodiesTask, awakeBodyCount, 16, stepContext, "ccd" );
+		b3ParallelFor( world, &b3FinalizeBodiesTask, awakeBodyCount, 8, stepContext, "ccd" );
 
 		// Free in reverse order
 		b3StackFree( &world->stack, graphBlocks );

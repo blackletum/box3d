@@ -578,6 +578,8 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	b3TriangleCache* triangleCaches = meshContact->triangleCache.data;
 
 	const b3HullData* hullB = shapeB->type == b3_hullShape ? shapeB->hull : NULL;
+	float hullSpeculativeDistance = enableSpeculative ? B3_SPECULATIVE_DISTANCE : 0.0f;
+	b3Vec3 hullMargin = { hullSpeculativeDistance, hullSpeculativeDistance, hullSpeculativeDistance };
 
 	for ( int index = 0; index < triangleCount && totalPointCount + 3 < pointBufferCapacity; ++index )
 	{
@@ -599,6 +601,19 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 		vertices[0] = b3Add( b3MulMV( relativeMatrix, triangle.vertices[0] ), transformAtoB.p );
 		vertices[1] = b3Add( b3MulMV( relativeMatrix, triangle.vertices[1] ), transformAtoB.p );
 		vertices[2] = b3Add( b3MulMV( relativeMatrix, triangle.vertices[2] ), transformAtoB.p );
+
+		if ( hullB != NULL )
+		{
+			b3AABB triangleBounds = {
+				.lowerBound = b3Sub( b3Min( vertices[0], b3Min( vertices[1], vertices[2] ) ), hullMargin ),
+				.upperBound = b3Add( b3Max( vertices[0], b3Max( vertices[1], vertices[2] ) ), hullMargin ),
+			};
+
+			if ( b3AABB_Overlaps( triangleBounds, hullB->aabb ) == false )
+			{
+				continue;
+			}
+		}
 
 		b3ContactCache* cache = &triangleCaches[index].cache;
 		int pointCapacity = pointBufferCapacity - totalPointCount;

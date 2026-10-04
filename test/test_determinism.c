@@ -28,7 +28,7 @@
 #define QUERY_SPAWN_HIT_COUNT 59
 #define QUERY_SPAWN_QUERY_HASH 0x5B4429DC
 #define MESH_DROP_SLEEP_STEP 217
-#define MESH_DROP_HASH 0xCF946437
+#define MESH_DROP_HASH 0xD8B55A29
 #else
 #define RAGDOLL_SLEEP_STEP 274
 #define RAGDOLL_HASH 0x773AB8ED
@@ -39,7 +39,7 @@
 #define QUERY_SPAWN_HIT_COUNT 59
 #define QUERY_SPAWN_QUERY_HASH 0xE3271F3D
 #define MESH_DROP_SLEEP_STEP 217
-#define MESH_DROP_HASH 0x256BC40B
+#define MESH_DROP_HASH 0x5FA6EEAC
 #endif
 
 // The goldens above pin exact values for the default four point manifold. A build that
