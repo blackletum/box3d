@@ -1148,3 +1148,109 @@ int b3GetWideContactConstraintByteCount( int simdWidth )
 
 	return b3GetWideContactConstraintByteCountW4();
 }
+
+void b3PrepareContacts_MeshWide( b3SolverBlock block, b3StepContext* context )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( context->world->simdWidth == 8 )
+	{
+		b3PrepareContacts_MeshWideW8( block, context );
+		return;
+	}
+#endif
+
+	b3PrepareContacts_MeshWideW4( block, context );
+}
+
+void b3WarmStartContacts_MeshWide( b3SolverBlock block, b3StepContext* context )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( context->world->simdWidth == 8 )
+	{
+		b3WarmStartContacts_MeshWideW8( block, context );
+		return;
+	}
+#endif
+
+	b3WarmStartContacts_MeshWideW4( block, context );
+}
+
+void b3PushContacts_MeshWide( b3SolverBlock block, b3StepContext* context )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( context->world->simdWidth == 8 )
+	{
+		b3PushContacts_MeshWideW8( block, context );
+		return;
+	}
+#endif
+
+	b3PushContacts_MeshWideW4( block, context );
+}
+
+void b3SolveContacts_MeshWide( b3SolverBlock block, b3StepContext* context )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( context->world->simdWidth == 8 )
+	{
+		b3SolveContacts_MeshWideW8( block, context );
+		return;
+	}
+#endif
+
+	b3SolveContacts_MeshWideW4( block, context );
+}
+
+void b3ApplyRestitution_MeshWide( b3SolverBlock block, b3StepContext* context )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( context->world->simdWidth == 8 )
+	{
+		b3ApplyRestitution_MeshWideW8( block, context );
+		return;
+	}
+#endif
+
+	b3ApplyRestitution_MeshWideW4( block, context );
+}
+
+void b3StoreImpulses_MeshWide( b3SolverBlock block, b3StepContext* context, int workerIndex )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( context->world->simdWidth == 8 )
+	{
+		b3StoreImpulses_MeshWideW8( block, context, workerIndex );
+		return;
+	}
+#endif
+
+	b3StoreImpulses_MeshWideW4( block, context, workerIndex );
+}
+
+int b3GetWideMeshConstraintByteCount( int simdWidth )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( simdWidth == 8 )
+	{
+		return b3GetWideMeshConstraintByteCountW8();
+	}
+#else
+	B3_UNUSED( simdWidth );
+#endif
+
+	return b3GetWideMeshConstraintByteCountW4();
+}
+
+int b3GetWideMeshManifoldByteCount( int simdWidth )
+{
+#if defined( B3_SIMD_HAS_WIDTH_8 )
+	if ( simdWidth == 8 )
+	{
+		return b3GetWideMeshManifoldByteCountW8();
+	}
+#else
+	B3_UNUSED( simdWidth );
+#endif
+
+	return b3GetWideMeshManifoldByteCountW4();
+}

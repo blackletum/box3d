@@ -163,6 +163,14 @@ typedef struct b3ContactPrepareSpan
 	b3ContactSpec* contacts;
 } b3ContactPrepareSpan;
 
+typedef struct b3MeshPrepareSpan
+{
+	int start;
+	int count;
+	b3ContactSpec* contacts;
+	int* order;
+} b3MeshPrepareSpan;
+
 typedef struct b3JointPrepareSpan
 {
 	int start;
@@ -226,6 +234,10 @@ typedef struct b3StepContext
 	struct b3ContactConstraint* contactConstraints;
 	b3ContactPrepareSpan* contactPrepareSpans;
 	b3ContactPrepareSpan* overflowSpans;
+	void* wideMeshConstraints;
+	void* wideMeshManifolds;
+	int* wideMeshManifoldStarts;
+	b3MeshPrepareSpan* meshPrepareSpans;
 	b3JointPrepareSpan* jointPrepareSpans;
 
 	int activeColorCount;

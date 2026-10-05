@@ -22,6 +22,7 @@ set(BOX3D_SOURCE_FILES
 	contact.c
 	contact.h
 	contact_solver_wide.inl
+	contact_solver_mesh_wide.inl
 	contact_solver.c
 	contact_solver.h
 	container.h
