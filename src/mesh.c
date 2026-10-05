@@ -2392,63 +2392,82 @@ void b3QueryMesh( const b3Mesh* mesh, b3AABB bounds, b3MeshQueryFcn* fcn, void* 
 	const b3MeshTriangle* triangles = b3GetMeshTriangles( data );
 	const b3Vec3* vertices = b3GetMeshVertices( data );
 
+	// Test node overlap in unscaled space
+	if ( b3TestBoundsOverlap( b3LoadV( &node->lowerBound.x ), b3LoadV( &node->upperBound.x ), invScaledBoundsMin,
+							  invScaledBoundsMax ) == false )
+	{
+		return;
+	}
+
 	while ( true )
 	{
-		// Test node overlap in unscaled space
-		b3V32 nodeMin = b3LoadV( &node->lowerBound.x );
-		b3V32 nodeMax = b3LoadV( &node->upperBound.x );
-
-		if ( b3TestBoundsOverlap( nodeMin, nodeMax, invScaledBoundsMin, invScaledBoundsMax ) )
+		if ( b3IsLeaf( node ) )
 		{
-			if ( b3IsLeaf( node ) )
+			int triangleCount = node->data.asLeaf.triangleCount;
+			int triangleOffset = node->triangleOffset;
+
+			for ( int index = 0; index < triangleCount; ++index )
 			{
-				int triangleCount = node->data.asLeaf.triangleCount;
-				int triangleOffset = node->triangleOffset;
+				int triangleIndex = triangleOffset + index;
+				b3MeshTriangle triangle = triangles[triangleIndex];
 
-				for ( int index = 0; index < triangleCount; ++index )
+				b3Vec3 vertex1 = vertices[triangle.index1];
+				b3Vec3 vertex2 = vertices[triangle.index2];
+				b3Vec3 vertex3 = vertices[triangle.index3];
+				b3V32 v1 = b3LoadV( &vertex1.x );
+				b3V32 v2 = b3LoadV( &vertex2.x );
+				b3V32 v3 = b3LoadV( &vertex3.x );
+
+				// Perform triangle overlap test in unscaled space.
+				// todo it is possible that some margins are getting scaled
+				if ( b3TestBoundsTriangleOverlap( invScaledBoundsCenter, invScaledBoundsExtent, v1, v2, v3 ) )
 				{
-					int triangleIndex = triangleOffset + index;
-					b3MeshTriangle triangle = triangles[triangleIndex];
-
-					b3Vec3 vertex1 = vertices[triangle.index1];
-					b3Vec3 vertex2 = vertices[triangle.index2];
-					b3Vec3 vertex3 = vertices[triangle.index3];
-					b3V32 v1 = b3LoadV( &vertex1.x );
-					b3V32 v2 = b3LoadV( &vertex2.x );
-					b3V32 v3 = b3LoadV( &vertex3.x );
-
-					// Perform triangle overlap test in unscaled space.
-					// todo it is possible that some margins are getting scaled
-					if ( b3TestBoundsTriangleOverlap( invScaledBoundsCenter, invScaledBoundsExtent, v1, v2, v3 ) )
+					b3Vec3 a = b3Mul( meshScale, vertex1 );
+					b3Vec3 b, c;
+					if ( ccw )
 					{
-						b3Vec3 a = b3Mul( meshScale, vertex1 );
-						b3Vec3 b, c;
-						if ( ccw )
-						{
-							b = b3Mul( meshScale, vertex2 );
-							c = b3Mul( meshScale, vertex3 );
-						}
-						else
-						{
-							b = b3Mul( meshScale, vertex3 );
-							c = b3Mul( meshScale, vertex2 );
-						}
+						b = b3Mul( meshScale, vertex2 );
+						c = b3Mul( meshScale, vertex3 );
+					}
+					else
+					{
+						b = b3Mul( meshScale, vertex3 );
+						c = b3Mul( meshScale, vertex2 );
+					}
 
-						bool result = fcn( a, b, c, triangleIndex, context );
-						if ( result == false )
-						{
-							return;
-						}
+					bool result = fcn( a, b, c, triangleIndex, context );
+					if ( result == false )
+					{
+						return;
 					}
 				}
 			}
-			else
-			{
-				// Recurse
-				B3_ASSERT( count <= B3_MESH_STACK_SIZE - 1 );
-				stack[count++] = b3GetRightChild( node );
-				node = b3GetLeftChild( node );
+		}
+		else
+		{
+			const b3MeshNode* leftChild = b3GetLeftChild( node );
+			const b3MeshNode* rightChild = b3GetRightChild( node );
 
+			bool overlapLeft = b3TestBoundsOverlap( b3LoadV( &leftChild->lowerBound.x ), b3LoadV( &leftChild->upperBound.x ),
+													invScaledBoundsMin, invScaledBoundsMax );
+			bool overlapRight = b3TestBoundsOverlap( b3LoadV( &rightChild->lowerBound.x ),
+													 b3LoadV( &rightChild->upperBound.x ), invScaledBoundsMin, invScaledBoundsMax );
+
+			if ( overlapLeft )
+			{
+				if ( overlapRight )
+				{
+					B3_ASSERT( count <= B3_MESH_STACK_SIZE - 1 );
+					stack[count++] = rightChild;
+				}
+
+				node = leftChild;
+				continue;
+			}
+
+			if ( overlapRight )
+			{
+				node = rightChild;
 				continue;
 			}
 		}

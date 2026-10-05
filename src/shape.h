@@ -81,6 +81,7 @@ void b3DestroyShapeAllocations( b3World* world, b3Shape* shape );
 
 b3MassData b3ComputeShapeMass( const b3Shape* shape );
 b3ShapeExtent b3ComputeShapeExtent( const b3Shape* shape, b3Vec3 localCenter );
+float b3ComputeShapeMinExtent( const b3Shape* shape, b3Vec3 localCenter );
 
 b3AABB b3ComputeSweptSphereAABB( const b3Sphere* shape, b3Transform xf1, b3Transform xf2 );
 b3AABB b3ComputeSweptCapsuleAABB( const b3Capsule* shape, b3Transform xf1, b3Transform xf2 );
