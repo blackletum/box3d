@@ -235,7 +235,6 @@ typedef struct b3StepContext
 	b3ContactPrepareSpan* contactPrepareSpans;
 	b3ContactPrepareSpan* overflowSpans;
 	void* wideMeshConstraints;
-	void* wideMeshManifolds;
 	int* wideMeshManifoldStarts;
 	b3MeshPrepareSpan* meshPrepareSpans;
 	b3JointPrepareSpan* jointPrepareSpans;

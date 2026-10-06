@@ -313,21 +313,10 @@ void b3WarmStartContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 	for ( int constraintIndex = startIndex; constraintIndex < endIndex; ++constraintIndex )
 	{
 		const b3ContactConstraint* contactConstraint = constraints + constraintIndex;
-		int indexA = contactConstraint->indexA;
-		int indexB = contactConstraint->indexB;
 
-		b3BodyState* stateA = indexA == B3_NULL_INDEX ? &dummyState : states + indexA;
-		b3BodyState* stateB = indexB == B3_NULL_INDEX ? &dummyState : states + indexB;
-
-		b3Vec3 vA = stateA->linearVelocity;
-		b3Vec3 wA = stateA->angularVelocity;
-		b3Vec3 vB = stateB->linearVelocity;
-		b3Vec3 wB = stateB->angularVelocity;
-
-		float mA = contactConstraint->invMassA;
-		b3Matrix3 iA = contactConstraint->invIA;
-		float mB = contactConstraint->invMassB;
-		b3Matrix3 iB = contactConstraint->invIB;
+		b3Vec3 linearImpulse = b3Vec3_zero;
+		b3Vec3 angularImpulseA = b3Vec3_zero;
+		b3Vec3 angularImpulseB = b3Vec3_zero;
 
 		int manifoldCount = contactConstraint->manifoldCount;
 		for ( int manifoldIndex = 0; manifoldIndex < manifoldCount; ++manifoldIndex )
@@ -336,60 +325,56 @@ void b3WarmStartContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 
 			// Normal impulses
 			b3Vec3 normal = constraint->normal;
+			float totalNormalImpulse = 0.0f;
+			b3Vec3 momentA = b3Vec3_zero;
+			b3Vec3 momentB = b3Vec3_zero;
+
 			int pointCount = constraint->pointCount;
 			for ( int j = 0; j < pointCount; ++j )
 			{
 				const b3ManifoldConstraintPoint* cp = constraint->points + j;
 
 				// fixed anchors
-				b3Vec3 rA = cp->rA;
-				b3Vec3 rB = cp->rB;
-
-				b3Vec3 impulse = b3MulSV( cp->normalImpulse, normal );
-				wA = b3Sub( wA, b3MulMV( iA, b3Cross( rA, impulse ) ) );
-				vA = b3MulSub( vA, mA, impulse );
-				wB = b3Add( wB, b3MulMV( iB, b3Cross( rB, impulse ) ) );
-				vB = b3MulAdd( vB, mB, impulse );
+				totalNormalImpulse += cp->normalImpulse;
+				momentA = b3MulAdd( momentA, cp->normalImpulse, cp->rA );
+				momentB = b3MulAdd( momentB, cp->normalImpulse, cp->rB );
 			}
 
 			// Central friction
-			{
-				b3Vec3 rA = constraint->centerA;
-				b3Vec3 rB = constraint->centerB;
-				b3Vec3 impulse = b3MulSV( constraint->frictionImpulse.x, constraint->tangent1 );
-				impulse = b3Add( impulse, b3MulSV( constraint->frictionImpulse.y, constraint->tangent2 ) );
+			b3Vec3 frictionImpulse = b3MulSV( constraint->frictionImpulse.x, constraint->tangent1 );
+			frictionImpulse = b3MulAdd( frictionImpulse, constraint->frictionImpulse.y, constraint->tangent2 );
 
-				wA = b3Sub( wA, b3MulMV( iA, b3Cross( rA, impulse ) ) );
-				vA = b3MulSub( vA, mA, impulse );
-				wB = b3Add( wB, b3MulMV( iB, b3Cross( rB, impulse ) ) );
-				vB = b3MulAdd( vB, mB, impulse );
-			}
+			linearImpulse = b3Add( linearImpulse, b3MulAdd( frictionImpulse, totalNormalImpulse, normal ) );
 
 			// Central twist friction
-			{
-				b3Vec3 impulse = b3MulSV( constraint->twistImpulse, constraint->normal );
-				wA = b3Sub( wA, b3MulMV( iA, impulse ) );
-				wB = b3Add( wB, b3MulMV( iB, impulse ) );
-			}
+			b3Vec3 twistImpulse = b3MulSV( constraint->twistImpulse, normal );
+
+			b3Vec3 angularA =
+				b3Add( b3Add( b3Cross( momentA, normal ), b3Cross( constraint->centerA, frictionImpulse ) ), twistImpulse );
+			b3Vec3 angularB =
+				b3Add( b3Add( b3Cross( momentB, normal ), b3Cross( constraint->centerB, frictionImpulse ) ), twistImpulse );
 
 			// Rolling resistance
-			{
-				b3Vec3 impulse = constraint->rollingImpulse;
-				wA = b3Sub( wA, b3MulMV( iA, impulse ) );
-				wB = b3Add( wB, b3MulMV( iB, impulse ) );
-			}
+			angularImpulseA = b3Add( angularImpulseA, b3Add( angularA, constraint->rollingImpulse ) );
+			angularImpulseB = b3Add( angularImpulseB, b3Add( angularB, constraint->rollingImpulse ) );
 		}
+
+		int indexA = contactConstraint->indexA;
+		int indexB = contactConstraint->indexB;
+
+		b3BodyState* stateA = indexA == B3_NULL_INDEX ? &dummyState : states + indexA;
+		b3BodyState* stateB = indexB == B3_NULL_INDEX ? &dummyState : states + indexB;
 
 		if ( stateA->flags & b3_dynamicFlag )
 		{
-			stateA->linearVelocity = vA;
-			stateA->angularVelocity = wA;
+			stateA->linearVelocity = b3MulSub( stateA->linearVelocity, contactConstraint->invMassA, linearImpulse );
+			stateA->angularVelocity = b3Sub( stateA->angularVelocity, b3MulMV( contactConstraint->invIA, angularImpulseA ) );
 		}
 
 		if ( stateB->flags & b3_dynamicFlag )
 		{
-			stateB->linearVelocity = vB;
-			stateB->angularVelocity = wB;
+			stateB->linearVelocity = b3MulAdd( stateB->linearVelocity, contactConstraint->invMassB, linearImpulse );
+			stateB->angularVelocity = b3Add( stateB->angularVelocity, b3MulMV( contactConstraint->invIB, angularImpulseB ) );
 		}
 	}
 }

@@ -1657,9 +1657,9 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 
 		int wideMeshConstraintByteCount = b3GetWideMeshConstraintByteCount( world->simdWidth );
 		int wideMeshManifoldByteCount = b3GetWideMeshManifoldByteCount( world->simdWidth );
-		void* wideMeshConstraints =
-			b3StackAlloc( &world->stack, meshGroupCount * wideMeshConstraintByteCount, "wide mesh constraints" );
-		void* wideMeshManifolds = b3StackAlloc( &world->stack, meshSlotCount * wideMeshManifoldByteCount, "wide mesh manifolds" );
+		void* wideMeshConstraints = b3StackAlloc(
+			&world->stack, meshGroupCount * wideMeshConstraintByteCount + meshSlotCount * wideMeshManifoldByteCount,
+			"wide mesh constraints" );
 
 		b3GraphColor* overflow = colors + B3_OVERFLOW_INDEX;
 		int overflowCount = overflow->contacts.count;
@@ -1725,12 +1725,15 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 				if ( colorContactCount == 0 )
 				{
 					color->wideMeshConstraints = NULL;
+					color->wideMeshManifoldStarts = NULL;
 					color->wideMeshConstraintCount = 0;
 				}
 				else
 				{
 					int colorMeshGroupCount = colorMeshGroupCounts[i];
-					color->wideMeshConstraints = ( (uint8_t*)wideMeshConstraints + meshGroupBase * wideMeshConstraintByteCount );
+					color->wideMeshConstraints = (uint8_t*)wideMeshConstraints + meshGroupBase * wideMeshConstraintByteCount +
+												 meshManifoldStarts[meshGroupBase] * wideMeshManifoldByteCount;
+					color->wideMeshManifoldStarts = meshManifoldStarts + meshGroupBase;
 					color->wideMeshConstraintCount = colorMeshGroupCount;
 					meshGroupBase += colorMeshGroupCount;
 					contactBase += colorContactCount;
@@ -1896,7 +1899,6 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 		stepContext->contactPrepareSpans = NULL;
 		stepContext->overflowSpans = overflowSpans;
 		stepContext->wideMeshConstraints = wideMeshConstraints;
-		stepContext->wideMeshManifolds = wideMeshManifolds;
 		stepContext->wideMeshManifoldStarts = meshManifoldStarts;
 		stepContext->meshPrepareSpans = meshPrepareSpans;
 		stepContext->jointPrepareSpans = jointPrepareSpans;
@@ -2004,7 +2006,6 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 		b3StackFree( &world->stack, stages );
 		b3StackFree( &world->stack, overflow->manifoldConstraints );
 		b3StackFree( &world->stack, overflow->contactConstraints );
-		b3StackFree( &world->stack, wideMeshManifolds );
 		b3StackFree( &world->stack, wideMeshConstraints );
 		b3StackFree( &world->stack, meshManifoldStarts );
 		b3StackFree( &world->stack, meshLaneOrder );
