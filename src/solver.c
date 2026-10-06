@@ -17,6 +17,7 @@
 #include "parallel_for.h"
 #include "physics_world.h"
 #include "platform.h"
+#include "qsort.h"
 #include "sensor.h"
 #include "shape.h"
 #include "solver_set.h"
@@ -25,13 +26,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 // these are useful for solver testing
 #define ITERATIONS 1
 #define RELAX_ITERATIONS 1
-
-#define B3_SORT_MESH_LANES 1
 
 #if ( defined( __GNUC__ ) || defined( __clang__ ) ) && ( defined( __i386__ ) || defined( __x86_64__ ) )
 static void b3Pause( void )
@@ -1456,13 +1454,6 @@ static void b3BulletBodyTask( int startIndex, int endIndex, int workerIndex, voi
 	b3TracyCZoneEnd( bullet_body_task );
 }
 
-static int b3CompareMeshLaneKeys( const void* a, const void* b )
-{
-	uint64_t keyA = *(const uint64_t*)a;
-	uint64_t keyB = *(const uint64_t*)b;
-	return keyA < keyB ? -1 : ( keyA > keyB ? 1 : 0 );
-}
-
 // Solve with graph coloring
 void b3Solve( b3World* world, b3StepContext* stepContext )
 {
@@ -1607,25 +1598,33 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 				const b3ContactSpec* specs = color->contacts.data;
 				int* order = meshLaneOrder + orderBase;
 
-#if B3_SORT_MESH_LANES
 				uint64_t* keys = sortKeys + orderBase;
 				for ( int j = 0; j < colorContactCount; ++j )
 				{
 					keys[j] = ( (uint64_t)( UINT16_MAX - specs[j].manifoldCount ) << 32 ) | (uint64_t)j;
 				}
 
-				qsort( keys, colorContactCount, sizeof( uint64_t ), b3CompareMeshLaneKeys );
+				{
+#define LESS( i, j ) ( keys[(int)( i )] < keys[(int)( j )] )
+#define SWAP( i, j )                                                                                                             \
+	do                                                                                                                           \
+	{                                                                                                                            \
+		uint64_t tmp_ = keys[(int)( i )];                                                                                        \
+		keys[(int)( i )] = keys[(int)( j )];                                                                                     \
+		keys[(int)( j )] = tmp_;                                                                                                 \
+	}                                                                                                                            \
+	while ( 0 )
+
+					QSORT( colorContactCount, LESS, SWAP );
+
+#undef LESS
+#undef SWAP
+				}
 
 				for ( int j = 0; j < colorContactCount; ++j )
 				{
 					order[j] = (int)( keys[j] & 0xFFFFFFFFu );
 				}
-#else
-				for ( int j = 0; j < colorContactCount; ++j )
-				{
-					order[j] = j;
-				}
-#endif
 
 				int colorMeshGroupCount = colorMeshGroupCounts[i];
 				for ( int g = 0; g < colorMeshGroupCount; ++g )
