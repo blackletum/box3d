@@ -7,41 +7,32 @@
 #include "simd.h"
 #include "simd_wide.h"
 
-#define b3Vec2W B3_WIDE( b3Vec2 )
-#define b3QuatW B3_WIDE( b3Quat )
-#define b3SymMatrix2W B3_WIDE( b3SymMatrix2 )
-#define b3SymMatrix3W B3_WIDE( b3SymMatrix3 )
-#define b3Matrix3W B3_WIDE( b3Matrix3 )
-#define b3BodyStateW B3_WIDE( b3BodyState )
-#define b3ContactConstraintPointWide B3_WIDE( b3ContactConstraintPoint )
-#define b3ContactConstraintWide B3_WIDE( b3ContactConstraint )
-
 // Wide vec2
-typedef struct b3Vec2W
+typedef struct B3_WIDE( b3Vec2 )
 {
 	b3FloatW x, y;
 } b3Vec2W;
 
 // Wide quaternion
-typedef struct b3QuatW
+typedef struct B3_WIDE( b3Quat )
 {
 	b3Vec3W V;
 	b3FloatW S;
 } b3QuatW;
 
 // Wide symmetric matrix2
-typedef struct b3SymMatrix2W
+typedef struct B3_WIDE( b3SymMatrix2 )
 {
 	b3FloatW cxx, cxy, cyy;
 } b3SymMatrix2W;
 
 // Wide symmetric matrix3
-typedef struct b3SymMatrix3W
+typedef struct B3_WIDE( b3SymMatrix3 )
 {
 	b3FloatW cxx, cxy, cxz, cyy, cyz, czz;
 } b3SymMatrix3W;
 
-typedef struct b3Matrix3W
+typedef struct B3_WIDE( b3Matrix3 )
 {
 	b3Vec3W cx, cy, cz;
 } b3Matrix3W;
@@ -102,35 +93,6 @@ static inline b3Vec3W b3MulAddMVW( b3Vec3W a, b3SymMatrix3W m, b3Vec3W b )
 	return (b3Vec3W){ b3AddW( a.X, c.X ), b3AddW( a.Y, c.Y ), b3AddW( a.Z, c.Z ) };
 }
 
-static inline b3Matrix3W b3MakeMatrixFromQuatW( b3QuatW q )
-{
-	b3FloatW x2 = b3AddW( q.V.X, q.V.X );
-	b3FloatW y2 = b3AddW( q.V.Y, q.V.Y );
-	b3FloatW z2 = b3AddW( q.V.Z, q.V.Z );
-	b3FloatW xx2 = b3MulW( q.V.X, x2 );
-	b3FloatW yy2 = b3MulW( q.V.Y, y2 );
-	b3FloatW zz2 = b3MulW( q.V.Z, z2 );
-	b3FloatW xy2 = b3MulW( q.V.X, y2 );
-	b3FloatW xz2 = b3MulW( q.V.X, z2 );
-	b3FloatW yz2 = b3MulW( q.V.Y, z2 );
-	b3FloatW xw2 = b3MulW( q.S, x2 );
-	b3FloatW yw2 = b3MulW( q.S, y2 );
-	b3FloatW zw2 = b3MulW( q.S, z2 );
-	b3FloatW one = b3SplatW( 1.0f );
-
-	b3Matrix3W m;
-	m.cx.X = b3SubW( one, b3AddW( yy2, zz2 ) );
-	m.cx.Y = b3AddW( xy2, zw2 );
-	m.cx.Z = b3SubW( xz2, yw2 );
-	m.cy.X = b3SubW( xy2, zw2 );
-	m.cy.Y = b3SubW( one, b3AddW( xx2, zz2 ) );
-	m.cy.Z = b3AddW( yz2, xw2 );
-	m.cz.X = b3AddW( xz2, yw2 );
-	m.cz.Y = b3SubW( yz2, xw2 );
-	m.cz.Z = b3SubW( one, b3AddW( xx2, yy2 ) );
-	return m;
-}
-
 static inline b3Vec3W b3MulM3VW( b3Matrix3W m, b3Vec3W a )
 {
 	b3Vec3W b = {
@@ -159,7 +121,7 @@ static inline b3Vec3W b3InvRotateVectorW( b3QuatW q, b3Vec3W a )
 // http://mmacklin.com/smallsteps.pdf
 // https://box2d.org/files/ErinCatto_SoftConstraints_GDC2011.pdf
 
-typedef struct b3ContactConstraintPointWide
+typedef struct B3_WIDE( b3ContactConstraintPoint )
 {
 	b3Vec3W anchorAs, anchorBs;
 	b3FloatW baseSeparations;
@@ -171,11 +133,10 @@ typedef struct b3ContactConstraintPointWide
 	b3FloatW restitutionImpulses;
 } b3ContactConstraintPointWide;
 
-typedef struct b3ContactManifoldWide
+typedef struct B3_WIDE( b3ContactManifold )
 {
 	_Alignas( B3_WIDE_ALIGNMENT ) b3Vec3W normal;
 
-	// todo test computing the tangents on the fly, at least tangent2
 	b3Vec3W tangent1;
 	b3Vec3W tangent2;
 
@@ -196,7 +157,7 @@ typedef struct b3ContactManifoldWide
 } b3ContactManifoldWide;
 
 // Solves one contact per lane
-typedef struct b3ContactConstraintWide
+typedef struct B3_WIDE( b3ContactConstraint )
 {
 	// These are base 1
 	_Alignas( B3_WIDE_ALIGNMENT ) int indexA[B3_SIMD_WIDTH];
@@ -214,7 +175,7 @@ typedef struct b3ContactConstraintWide
 	int manifoldCount;
 } b3ContactConstraintWide;
 
-typedef struct b3ConvexConstraintWide
+typedef struct B3_WIDE( b3ConvexConstraint )
 {
 	b3ContactConstraintWide base;
 	b3ContactManifoldWide manifold;
@@ -240,7 +201,7 @@ int B3_WIDE( b3GetWideMeshManifoldByteCount )( void )
 }
 
 // wide version of b3BodyState
-typedef struct b3BodyStateW
+typedef struct B3_WIDE( b3BodyState )
 {
 	b3Vec3W v;
 	b3Vec3W w;
@@ -490,7 +451,7 @@ static const b3BodySim b3_zeroBodySim = { 0 };
 #define B3_GATHER_LANES( wide, lanes, field ) wide = b3SetW( lanes[0]->field, lanes[1]->field, lanes[2]->field, lanes[3]->field )
 #endif
 
-static inline b3SymMatrix3W b3GatherInvInertiaW( const b3BodySim* const* simLanes )
+static inline b3SymMatrix3W b3GatherInvInertiaW( const b3BodySim* simLanes[B3_SIMD_WIDTH] )
 {
 	const float* i0 = &simLanes[0]->invInertiaWorld.cx.x;
 	const float* i1 = &simLanes[1]->invInertiaWorld.cx.x;
@@ -569,11 +530,13 @@ static inline b3FloatW b3IntsToFloatW( const int* v )
 #endif
 }
 
+// Get the contiguous manifold array that trails the constraint.
 static inline b3ContactManifoldWide* b3GetManifoldsW( b3ContactConstraintWide* c )
 {
 	return (b3ContactManifoldWide*)( c + 1 );
 }
 
+// fixedManifoldCount is 1 to indicate a convex contact with one manifold.
 B3_FORCE_INLINE b3ContactConstraintWide* b3GetConstraintW( void* base, const int* manifoldStarts, int index,
 														   int fixedManifoldCount )
 {
@@ -594,6 +557,8 @@ B3_FORCE_INLINE b3ContactConstraintWide* b3NextConstraintW( b3ContactConstraintW
 									   manifoldCount * sizeof( b3ContactManifoldWide ) );
 }
 
+// Contact constraint data is stored in a heterogious stream. Constraints followed by an array of constraint manifolds.
+// [c1 m11 m12 c2 m21 c3 m31 m32 m33 ... ]
 B3_FORCE_INLINE bool b3PrepareConstraintW( b3ContactConstraintWide* c, b3Contact* const* contacts, int manifoldCount,
 										   b3StepContext* context, b3FloatW warmStartScale )
 {
@@ -1011,6 +976,8 @@ void B3_WIDE( b3PrepareContacts_MeshWide )( b3SolverBlock block, b3StepContext* 
 		int colorWideEndIndex = b3MinInt( spans[colorIndex + 1].start, endWideIndex );
 		int colorContactCount = spans[colorIndex].count;
 		b3ContactSpec* specs = spans[colorIndex].contacts;
+
+		// This order is used to group contacts with similar manifold counts to keep the lanes full.
 		const int* order = spans[colorIndex].order;
 
 		for ( ; wideIndex < colorWideEndIndex; ++wideIndex )
@@ -1255,6 +1222,7 @@ B3_FORCE_INLINE void b3SolveContactsW( b3SolverBlock block, b3StepContext* conte
 			b3FloatW totalNormalImpulse = zeroW;
 			b3FloatW totalTwistLimit = zeroW;
 
+			// Normal contraints
 			for ( int pointIndex = 0; pointIndex < cm->pointCount; ++pointIndex )
 			{
 				b3ContactConstraintPointWide* cp = cm->points + pointIndex;
@@ -1293,7 +1261,7 @@ B3_FORCE_INLINE void b3SolveContactsW( b3SolverBlock block, b3StepContext* conte
 				bB.v = b3MulAddSVW( bB.v, c->invMassB, P );
 			}
 
-			// Rolling resistance
+			// Rolling resistance. After normal constraints because it uses the normal impulse.
 			if ( anyRolling )
 			{
 				// flip A/B order to negate
@@ -1327,7 +1295,7 @@ B3_FORCE_INLINE void b3SolveContactsW( b3SolverBlock block, b3StepContext* conte
 				bB.w = b3MulAddMVW( bB.w, c->invIB, deltaImpulse );
 			}
 
-			// Central twist friction
+			// Central twist friction. Friction goes last to improve stacking stability.
 			{
 				b3FloatW twistSpeed = b3DotW( cm->normal, b3SubVW( bB.w, bA.w ) );
 				b3FloatW maxLambda = b3MulW( c->friction, totalTwistLimit );
@@ -1341,7 +1309,7 @@ B3_FORCE_INLINE void b3SolveContactsW( b3SolverBlock block, b3StepContext* conte
 				bB.w = b3MulAddMVW( bB.w, c->invIB, L );
 			}
 
-			// Central friction
+			// Central friction. Friction goes last to improve stacking stability.
 			{
 				b3Vec3W tangent1 = cm->tangent1;
 				b3Vec3W tangent2 = cm->tangent2;
@@ -1430,13 +1398,15 @@ B3_FORCE_INLINE void b3ApplyRestitutionW( b3SolverBlock block, b3StepContext* co
 
 		b3FloatW restitutionMask = b3GreaterThanW( c->restitution, zeroW );
 		b3Vec3W dp = b3SubVW( bB.dp, bA.dp );
-		b3Matrix3W dqA = b3MakeMatrixFromQuatW( bA.dq );
-		b3Matrix3W dqB = b3MakeMatrixFromQuatW( bB.dq );
 
 		b3ContactManifoldWide* manifolds = b3GetManifoldsW( c );
 		for ( int manifoldIndex = 0; manifoldIndex < manifoldCount; ++manifoldIndex )
 		{
 			b3ContactManifoldWide* cm = manifolds + manifoldIndex;
+
+			b3FloatW normalSeparation = b3DotW( cm->normal, dp );
+			b3Vec3W normalA = b3InvRotateVectorW( bA.dq, cm->normal );
+			b3Vec3W normalB = b3InvRotateVectorW( bB.dq, cm->normal );
 
 			// Read the point count rather than put on stack to avoid register spills.
 			for ( int pointIndex = 0; pointIndex < cm->pointCount; ++pointIndex )
@@ -1446,17 +1416,15 @@ B3_FORCE_INLINE void b3ApplyRestitutionW( b3SolverBlock block, b3StepContext* co
 				b3Vec3W rA = cp->anchorAs;
 				b3Vec3W rB = cp->anchorBs;
 
+				b3FloatW s = b3AddW( b3AddW( normalSeparation, b3SubW( b3DotW( normalB, rB ), b3DotW( normalA, rA ) ) ),
+									 cp->baseSeparations );
+
 				b3FloatW normalMass = propagate ? cp->normalMasses : b3BlendW( zeroW, cp->normalMasses, restitutionMask );
 
 				b3FloatW compressionImpulse = b3SubW( cp->totalNormalImpulses, cp->restitutionImpulses );
 				b3FloatW armed =
 					b3AndW( b3AndW( restitutionMask, b3LessThanW( cp->relativeVelocities, negRestitutionThreshold ) ),
 							b3GreaterThanW( compressionImpulse, zeroW ) );
-
-				b3Vec3W rsA = b3MulM3VW( dqA, rA );
-				b3Vec3W rsB = b3MulM3VW( dqB, rB );
-				b3Vec3W ds = b3AddVW( dp, b3SubVW( rsB, rsA ) );
-				b3FloatW s = b3AddW( b3DotW( cm->normal, ds ), cp->baseSeparations );
 
 				b3FloatW specBias = b3MaxW( zeroW, b3MulW( s, inv_h ) );
 				b3FloatW velocityBias = b3BlendW( specBias, b3MulW( c->restitution, cp->relativeVelocities ), armed );
@@ -1510,6 +1478,7 @@ B3_FORCE_INLINE void b3StoreImpulsesW( b3SolverBlock block, b3StepContext* conte
 		int manifoldCount = fixedManifoldCount > 0 ? fixedManifoldCount : c->manifoldCount;
 		const b3ContactManifoldWide* manifolds = b3GetManifoldsW( c );
 
+		// Pay the cache misses up front.
 		b3Manifold* laneManifolds[B3_SIMD_WIDTH];
 		for ( int lane = 0; lane < B3_SIMD_WIDTH; ++lane )
 		{
@@ -1602,6 +1571,8 @@ B3_FORCE_INLINE void b3StoreImpulsesW( b3SolverBlock block, b3StepContext* conte
 
 	taskContext->hasHitEvents = hasHitEvents;
 }
+
+// These wrappers allow the implementation be shared between convex and mesh contacts.
 
 void B3_WIDE( b3WarmStartContacts_Convex )( b3SolverBlock block, b3StepContext* context )
 {

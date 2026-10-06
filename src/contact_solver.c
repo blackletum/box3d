@@ -238,6 +238,10 @@ void b3PrepareContacts_Mesh( b3SolverBlock block, b3StepContext* context )
 					// should not contribute to the friction center. They are not important for jitter reduction. Closer
 					// points may begin to touch on and off, so the friction center needs to move smoothly.
 					// Epsilon to avoid a branch below (or divide by zero). Small enough to get washed out normally.
+					// 
+					// Dirk suggested to weight the points by their normal impulse. This would use the total impulse from
+					// the previous time step. I suspect this could jump around if the active point set jitters, leading
+					// to a limit cycle.
 					float weight = b3ClampFloat( 2.0f - s * invTau, B3_MIN_FRICTION_WEIGHT, 1.0f );
 					centerA = b3MulAdd( centerA, weight, rA );
 					centerB = b3MulAdd( centerB, weight, rB );
