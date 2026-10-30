@@ -163,11 +163,12 @@ static inline b3Triangle b3GetMeshTriangle( const b3Mesh* mesh, int triangleInde
 		result.i2 = triangle.index3;
 		result.i3 = triangle.index2;
 
-		// mesh is inverted, so concave edges are now convex
-		result.flags = 0;
-		result.flags |= ( triangleFlags & b3_inverseConcaveEdge1 ) ? b3_concaveEdge1 : 0;
-		result.flags |= ( triangleFlags & b3_inverseConcaveEdge2 ) ? b3_concaveEdge2 : 0;
-		result.flags |= ( triangleFlags & b3_inverseConcaveEdge3 ) ? b3_concaveEdge3 : 0;
+		// Hand mesh inversion.
+		int edge1Bits = triangleFlags & ( b3_concaveEdge1 | b3_inverseConcaveEdge1 );
+		int edge3Bits = triangleFlags & ( b3_concaveEdge3 | b3_inverseConcaveEdge3 );
+		result.flags = triangleFlags & ~( b3_concaveEdge1 | b3_concaveEdge3 | b3_inverseConcaveEdge1 | b3_inverseConcaveEdge3 );
+		result.flags |= edge1Bits << 2;
+		result.flags |= edge3Bits >> 2;
 	}
 	else
 	{

@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Erin Catto
 // SPDX-License-Identifier: MIT
 
+#include "shape.h"
 #include "test_macros.h"
 
+#include "box3d/box3d.h"
 #include "box3d/collision.h"
 #include "box3d/math_functions.h"
 
@@ -341,6 +343,231 @@ static int MeshCreators( void )
 	return 0;
 }
 
+// Two bits per edge: concave and inverse concave. Both set means flat.
+static int EdgeClass( int flags, int edgeIndex )
+{
+	int concave = ( flags >> edgeIndex ) & 1;
+	int inverse = ( flags >> ( edgeIndex + 4 ) ) & 1;
+	return concave | inverse << 1;
+}
+
+// A mirror with the winding swapped keeps every edge convex, concave or flat, so each edge
+// class must follow its vertex pair to its new slot
+static bool MirroredFlagsMatch( const b3MeshData* data, b3Vec3 mirrorScale )
+{
+	b3Mesh plain = { .data = data, .scale = b3Vec3_one };
+	b3Mesh mirrored = { .data = data, .scale = mirrorScale };
+
+	for ( int i = 0; i < data->triangleCount; ++i )
+	{
+		b3Triangle triangle1 = b3GetMeshTriangle( &plain, i );
+		b3Triangle triangle2 = b3GetMeshTriangle( &mirrored, i );
+		int indices1[3] = { triangle1.i1, triangle1.i2, triangle1.i3 };
+		int indices2[3] = { triangle2.i1, triangle2.i2, triangle2.i3 };
+
+		for ( int k = 0; k < 3; ++k )
+		{
+			int a = indices2[k];
+			int b = indices2[( k + 1 ) % 3];
+
+			int match = -1;
+			for ( int j = 0; j < 3; ++j )
+			{
+				int c = indices1[j];
+				int d = indices1[( j + 1 ) % 3];
+				if ( ( a == c && b == d ) || ( a == d && b == c ) )
+				{
+					match = j;
+				}
+			}
+
+			if ( match == -1 || EdgeClass( triangle2.flags, k ) != EdgeClass( triangle1.flags, match ) )
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+static bool HasConvexEdge( const b3MeshData* mesh )
+{
+	const uint8_t* flags = b3GetMeshFlags( mesh );
+
+	for ( int i = 0; i < mesh->triangleCount; ++i )
+	{
+		for ( int k = 0; k < 3; ++k )
+		{
+			if ( EdgeClass( flags[i], k ) == 2 )
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+// The valley has concave and flat edges, the box has convex and flat edges
+static int MeshMirroredFlags( void )
+{
+	b3Vec3 vertices[VALLEY_VERTEX_COUNT];
+	int32_t indices[3 * VALLEY_TRIANGLE_COUNT];
+	MakeValley( vertices, indices );
+
+	b3MeshDef def = MakeValleyDef( vertices, indices );
+	b3MeshData* valley = b3CreateMesh( &def, NULL, 0 );
+	ENSURE( valley != NULL );
+	ENSURE( HasConcaveEdge( valley ) );
+
+	b3MeshData* box = b3CreateBoxMesh( b3Vec3_zero, (b3Vec3){ 1.0f, 2.0f, 3.0f }, true );
+	ENSURE( box != NULL );
+	ENSURE( HasConvexEdge( box ) );
+
+	b3Vec3 mirrorScales[] = {
+		{ -1.0f, 1.0f, 1.0f },
+		{ 1.0f, -1.0f, 1.0f },
+		{ 2.0f, 0.5f, -3.0f },
+		{ -1.0f, -1.0f, -1.0f },
+	};
+
+	for ( int i = 0; i < ARRAY_COUNT( mirrorScales ); ++i )
+	{
+		ENSURE( MirroredFlagsMatch( valley, mirrorScales[i] ) );
+		ENSURE( MirroredFlagsMatch( box, mirrorScales[i] ) );
+	}
+
+	b3DestroyMesh( box );
+	b3DestroyMesh( valley );
+	return 0;
+}
+
+// A wide box sliding over a fine grid sits on hundreds of flat internal edges. With no friction
+// any manifold off the face normal is a ghost that slows or lifts the box.
+static int WideHullSlide( b3Vec3 meshScale )
+{
+	b3WorldDef worldDef = b3DefaultWorldDef();
+	b3WorldId worldId = b3CreateWorld( &worldDef );
+
+	b3MeshData* mesh = b3CreateGridMesh( 120, 40, 0.25f, 0, true );
+	ENSURE( mesh != NULL );
+
+	b3BodyDef bodyDef = b3DefaultBodyDef();
+	b3BodyId groundId = b3CreateBody( worldId, &bodyDef );
+	b3ShapeDef shapeDef = b3DefaultShapeDef();
+	b3CreateMeshShape( groundId, &shapeDef, mesh, meshScale );
+
+	float speed = 4.0f;
+	bodyDef.type = b3_dynamicBody;
+	bodyDef.position = (b3Pos){ -10.0f, 0.5f, 0.0f };
+	bodyDef.linearVelocity = (b3Vec3){ speed, 0.0f, 0.0f };
+	b3BodyId boxId = b3CreateBody( worldId, &bodyDef );
+
+	b3BoxHull box = b3MakeBoxHull( 1.25f, 0.5f, 1.25f );
+	shapeDef.baseMaterial.friction = 0.0f;
+	b3CreateHullShape( boxId, &shapeDef, &box.base );
+
+	int ghostCount = 0;
+	for ( int step = 0; step < 120; ++step )
+	{
+		b3World_Step( worldId, 1.0f / 60.0f, 4 );
+
+		b3ContactData contacts[4];
+		int contactCount = b3Body_GetContactData( boxId, contacts, ARRAY_COUNT( contacts ) );
+		for ( int i = 0; i < contactCount; ++i )
+		{
+			for ( int j = 0; j < contacts[i].manifoldCount; ++j )
+			{
+				if ( b3AbsFloat( contacts[i].manifolds[j].normal.y ) < 0.99f )
+				{
+					ghostCount += 1;
+				}
+			}
+		}
+	}
+
+	b3Vec3 velocity = b3Body_GetLinearVelocity( boxId );
+
+	ENSURE( ghostCount == 0 );
+	ENSURE( velocity.x > 0.99f * speed );
+	ENSURE( b3AbsFloat( velocity.y ) < 0.01f );
+
+	b3DestroyWorld( worldId );
+	b3DestroyMesh( mesh );
+	return 0;
+}
+
+// The box overlaps more than a thousand grid triangles. All of them must reach the narrow
+// phase, so the reduced manifold reaches all four sides of the footprint.
+static int MeshManyTriangles( void )
+{
+	b3WorldDef worldDef = b3DefaultWorldDef();
+	b3WorldId worldId = b3CreateWorld( &worldDef );
+
+	b3MeshData* mesh = b3CreateGridMesh( 40, 40, 0.25f, 0, true );
+	ENSURE( mesh != NULL );
+
+	b3BodyDef bodyDef = b3DefaultBodyDef();
+	b3BodyId groundId = b3CreateBody( worldId, &bodyDef );
+	b3ShapeDef shapeDef = b3DefaultShapeDef();
+	b3CreateMeshShape( groundId, &shapeDef, mesh, b3Vec3_one );
+
+	bodyDef.type = b3_dynamicBody;
+	bodyDef.position = (b3Pos){ 0.0f, 0.5f, 0.0f };
+	b3BodyId boxId = b3CreateBody( worldId, &bodyDef );
+
+	b3BoxHull box = b3MakeBoxHull( 3.0f, 0.5f, 3.0f );
+	b3ShapeId boxShapeId = b3CreateHullShape( boxId, &shapeDef, &box.base );
+
+	for ( int step = 0; step < 30; ++step )
+	{
+		b3World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+
+	b3Pos position = b3Body_GetPosition( boxId );
+	b3Quat rotation = b3Body_GetRotation( boxId );
+
+	ENSURE( b3AbsFloat( (float)position.y - 0.5f ) < 0.02f );
+	ENSURE( b3AbsFloat( rotation.v.x ) < 0.001f );
+	ENSURE( b3AbsFloat( rotation.v.z ) < 0.001f );
+
+	b3Vec3 lower = { FLT_MAX, FLT_MAX, FLT_MAX };
+	b3Vec3 upper = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+
+	b3ContactData contacts[4];
+	int contactCount = b3Body_GetContactData( boxId, contacts, ARRAY_COUNT( contacts ) );
+	for ( int i = 0; i < contactCount; ++i )
+	{
+		bool boxIsA = B3_ID_EQUALS( contacts[i].shapeIdA, boxShapeId );
+		for ( int j = 0; j < contacts[i].manifoldCount; ++j )
+		{
+			const b3Manifold* manifold = contacts[i].manifolds + j;
+			for ( int k = 0; k < manifold->pointCount; ++k )
+			{
+				b3Vec3 anchor = boxIsA ? manifold->points[k].anchorA : manifold->points[k].anchorB;
+				lower = b3Min( lower, anchor );
+				upper = b3Max( upper, anchor );
+			}
+		}
+	}
+
+	ENSURE( lower.x < -2.5f && upper.x > 2.5f );
+	ENSURE( lower.z < -2.5f && upper.z > 2.5f );
+
+	b3DestroyWorld( worldId );
+	b3DestroyMesh( mesh );
+	return 0;
+}
+
+// The grid is symmetric in x, so the mirror only changes the winding and the flags
+static int MeshWideHullSlide( void )
+{
+	ENSURE( WideHullSlide( b3Vec3_one ) == 0 );
+	ENSURE( WideHullSlide( (b3Vec3){ -1.0f, 1.0f, 1.0f } ) == 0 );
+	return 0;
+}
+
 int MeshTest( void )
 {
 	RUN_SUBTEST( MeshDenseStride );
@@ -350,6 +577,9 @@ int MeshTest( void )
 	RUN_SUBTEST( MeshClockWiseIgnored );
 	RUN_SUBTEST( MeshClockWiseStrideWeld );
 	RUN_SUBTEST( MeshCreators );
+	RUN_SUBTEST( MeshWideHullSlide );
+	RUN_SUBTEST( MeshManyTriangles );
+	RUN_SUBTEST( MeshMirroredFlags );
 
 	return 0;
 }

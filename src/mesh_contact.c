@@ -12,6 +12,7 @@
 #include "box3d/types.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #define B3_MAX_POINTS_PER_TRIANGLE 32
 
@@ -30,8 +31,11 @@ static bool b3IsSorted( const int* array, int count )
 }
 #endif
 
+#define B3_INITIAL_TRIANGLE_CAPACITY 512
+
 typedef struct b3TriangleQueryContext
 {
+	b3Arena* arena;
 	int* indices;
 	int capacity;
 	int count;
@@ -40,38 +44,19 @@ typedef struct b3TriangleQueryContext
 static bool b3CollectTriangleIndicesCallback( b3Vec3 a, b3Vec3 b, b3Vec3 c, int triangleIndex, void* context )
 {
 	B3_UNUSED( a, b, c );
-	b3TriangleQueryContext* triangleContext = (b3TriangleQueryContext*)context;
+	b3TriangleQueryContext* triangleContext = context;
 	if ( triangleContext->count == triangleContext->capacity )
 	{
-		return false;
+		int capacity = 2 * triangleContext->capacity;
+		int* indices = b3Bump( triangleContext->arena, capacity * (int)sizeof( int ) );
+		memcpy( indices, triangleContext->indices, triangleContext->count * sizeof( int ) );
+		triangleContext->indices = indices;
+		triangleContext->capacity = capacity;
 	}
+
 	triangleContext->indices[triangleContext->count] = triangleIndex;
 	triangleContext->count += 1;
-	return triangleContext->count < triangleContext->capacity;
-}
-
-static int b3QueryMeshTriangles( int* indices, int capacity, const b3Mesh* mesh, b3AABB bounds )
-{
-	b3TriangleQueryContext context = {
-		.indices = indices,
-		.capacity = capacity,
-		.count = 0,
-	};
-
-	b3QueryMesh( mesh, bounds, b3CollectTriangleIndicesCallback, &context );
-	return context.count;
-}
-
-static int b3QueryHeightFieldTriangles( int* indices, int capacity, const b3HeightFieldData* heightField, b3AABB bounds )
-{
-	b3TriangleQueryContext context = {
-		.indices = indices,
-		.capacity = capacity,
-		.count = 0,
-	};
-
-	b3QueryHeightField( heightField, bounds, b3CollectTriangleIndicesCallback, &context );
-	return context.count;
+	return true;
 }
 
 static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTransform xfA, const b3AABB* bounds, b3Arena arena )
@@ -102,33 +87,29 @@ static void b3RefreshCache( b3Contact* contact, const b3Shape* shapeA, b3WorldTr
 	meshContact->queryBounds.upperBound = b3Add( bounds->upperBound, extension );
 
 	// Query triangles
-	int triangleCapacity = B3_MAX_MESH_CONTACT_TRIANGLES;
-	int* triangleIndices = b3Bump( &arena, B3_MAX_MESH_CONTACT_TRIANGLES * sizeof( int ) );
+	b3TriangleQueryContext queryContext = {
+		.arena = &arena,
+		.indices = b3Bump( &arena, B3_INITIAL_TRIANGLE_CAPACITY * (int)sizeof( int ) ),
+		.capacity = B3_INITIAL_TRIANGLE_CAPACITY,
+		.count = 0,
+	};
 
 	// Bounds are in world space. Convert to the local mesh frame. The broadphase bounds are float,
 	// so the demoted mesh transform is the matching float world frame (exact in float mode).
 	b3Transform meshTransform = b3ToRelativeTransform( xfA, b3Pos_zero );
 	b3AABB localBounds = b3AABB_Transform( b3InvertTransform( meshTransform ), meshContact->queryBounds );
-	int triangleCount;
 	if ( shapeA->type == b3_meshShape )
 	{
-		triangleCount = b3QueryMeshTriangles( triangleIndices, triangleCapacity, &shapeA->mesh, localBounds );
+		b3QueryMesh( &shapeA->mesh, localBounds, b3CollectTriangleIndicesCallback, &queryContext );
 	}
 	else
 	{
 		B3_ASSERT( shapeA->type == b3_heightShape );
-		triangleCount = b3QueryHeightFieldTriangles( triangleIndices, triangleCapacity, shapeA->heightField, localBounds );
+		b3QueryHeightField( shapeA->heightField, localBounds, b3CollectTriangleIndicesCallback, &queryContext );
 	}
 
-	if ( triangleCount == triangleCapacity )
-	{
-		static bool s_once = false;
-		if ( s_once == false )
-		{
-			b3Log( "WARNING: complex mesh detected, triangle buffer capacity of %d reached", triangleCapacity );
-			s_once = true;
-		}
-	}
+	int* triangleIndices = queryContext.indices;
+	int triangleCount = queryContext.count;
 
 	// Triangle indices must be sorted to match caches.
 	B3_VALIDATE( b3IsSorted( triangleIndices, triangleCount ) );
@@ -174,57 +155,71 @@ typedef struct b3TentativeTriangle
 	int index;
 } b3TentativeTriangle;
 
-#define B3_MAX_EDGE_COUNT 64
+#define B3_EMPTY_EDGE_KEY UINT64_MAX
+
+// Capacity for edge and vertex keys.
+static int b3GetFoundCapacity( int keyCount )
+{
+	int capacity = 16;
+	while ( capacity < 2 * keyCount )
+	{
+		capacity *= 2;
+	}
+	return capacity;
+}
 
 typedef struct b3FoundEdges
 {
-	uint64_t keys[B3_MAX_EDGE_COUNT];
-	int count;
+	uint64_t* keys;
+	int mask;
 } b3FoundEdges;
+
+static b3FoundEdges b3CreateFoundEdges( b3Arena* arena, int edgeCount )
+{
+	int capacity = b3GetFoundCapacity( edgeCount );
+	b3FoundEdges edges;
+	edges.keys = b3Bump( arena, capacity * (int)sizeof( uint64_t ) );
+	memset( edges.keys, 0xFF, capacity * sizeof( uint64_t ) );
+	edges.mask = capacity - 1;
+	return edges;
+}
+
+static inline uint64_t b3MakeEdgeKey( int vertex1, int vertex2 )
+{
+	uint64_t i1 = (uint64_t)b3MinInt( vertex1, vertex2 );
+	uint64_t i2 = (uint64_t)b3MaxInt( vertex1, vertex2 );
+	return i1 << 32 | i2;
+}
+
+static inline int b3FindEdgeSlot( const b3FoundEdges* edges, uint64_t key )
+{
+	int index = (int)( b3KeyHash( key ) & (uint32_t)edges->mask );
+	while ( edges->keys[index] != key && edges->keys[index] != B3_EMPTY_EDGE_KEY )
+	{
+		index = ( index + 1 ) & edges->mask;
+	}
+
+	return index;
+}
 
 static inline bool b3AddEdge( b3FoundEdges* edges, int vertex1, int vertex2 )
 {
-	uint64_t i1 = (uint64_t)b3MinInt( vertex1, vertex2 );
-	uint64_t i2 = (uint64_t)b3MaxInt( vertex1, vertex2 );
-	uint64_t key = i1 << 32 | i2;
-
-	int count = edges->count;
-	for ( int i = 0; i < count; ++i )
+	uint64_t key = b3MakeEdgeKey( vertex1, vertex2 );
+	int index = b3FindEdgeSlot( edges, key );
+	if ( edges->keys[index] == key )
 	{
-		if ( edges->keys[i] == key )
-		{
-			return false;
-		}
+		return false;
 	}
 
-	if ( count == B3_MAX_EDGE_COUNT )
-	{
-		// This will lead to a potential ghost collision
-		return true;
-	}
-
-	edges->keys[count] = key;
-	edges->count += 1;
-
+	edges->keys[index] = key;
 	return true;
 }
 
-static inline bool b3FindEdge( b3FoundEdges* edges, int vertex1, int vertex2 )
+static inline bool b3FindEdge( const b3FoundEdges* edges, int vertex1, int vertex2 )
 {
-	uint64_t i1 = (uint64_t)b3MinInt( vertex1, vertex2 );
-	uint64_t i2 = (uint64_t)b3MaxInt( vertex1, vertex2 );
-	uint64_t key = i1 << 32 | i2;
-
-	int count = edges->count;
-	for ( int i = 0; i < count; ++i )
-	{
-		if ( edges->keys[i] == key )
-		{
-			return true;
-		}
-	}
-
-	return false;
+	uint64_t key = b3MakeEdgeKey( vertex1, vertex2 );
+	int index = b3FindEdgeSlot( edges, key );
+	return edges->keys[index] == key;
 }
 
 #if 0
@@ -239,36 +234,36 @@ static inline bool b3TrianglesShareEdge( int a1, int a2, int a3, int b1, int b2,
 }
 #endif
 
-#define B3_MAX_VERTEX_COUNT 64
-
 typedef struct b3FoundVertices
 {
-	int keys[B3_MAX_VERTEX_COUNT];
-	int count;
+	int* keys;
+	int mask;
 } b3FoundVertices;
+
+static b3FoundVertices b3CreateFoundVertices( b3Arena* arena, int vertexCount )
+{
+	int capacity = b3GetFoundCapacity( vertexCount );
+	b3FoundVertices vertices;
+	vertices.keys = b3Bump( arena, capacity * (int)sizeof( int ) );
+	memset( vertices.keys, 0xFF, capacity * sizeof( int ) );
+	vertices.mask = capacity - 1;
+	return vertices;
+}
 
 static inline bool b3AddVertex( b3FoundVertices* vertices, int vertex )
 {
-	int key = vertex;
-
-	int count = vertices->count;
-	for ( int i = 0; i < count; ++i )
+	int index = (int)( b3KeyHash( (uint64_t)vertex ) & (uint32_t)vertices->mask );
+	while ( vertices->keys[index] != B3_NULL_INDEX )
 	{
-		if ( vertices->keys[i] == key )
+		if ( vertices->keys[index] == vertex )
 		{
 			return false;
 		}
+
+		index = ( index + 1 ) & vertices->mask;
 	}
 
-	if ( count == B3_MAX_VERTEX_COUNT )
-	{
-		// This will lead to a potential ghost collision
-		return true;
-	}
-
-	vertices->keys[count] = key;
-	vertices->count += 1;
-
+	vertices->keys[index] = vertex;
 	return true;
 }
 
@@ -549,11 +544,6 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	b3TentativeTriangle* tentativeTriangles = b3Bump( &arena, triangleCount * sizeof( b3TentativeTriangle ) );
 	int tentativeTriangleCount = 0;
 
-	b3FoundEdges foundEdges;
-	b3FoundVertices foundVertices;
-	foundEdges.count = 0;
-	foundVertices.count = 0;
-
 	// This transform converts from mesh frame into the shapeB frame
 	b3Transform transformAtoB = b3InvMulWorldTransforms( xfB, xfA );
 	b3Matrix3 relativeMatrix = b3MakeMatrixFromQuat( transformAtoB.q );
@@ -782,13 +772,6 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 
 			if ( manifold->feature == b3_featureTriangleFace || B3_FORCE_GHOST_COLLISIONS )
 			{
-				(void)b3AddEdge( &foundEdges, triangle.i1, triangle.i2 );
-				(void)b3AddEdge( &foundEdges, triangle.i2, triangle.i3 );
-				(void)b3AddEdge( &foundEdges, triangle.i3, triangle.i1 );
-				(void)b3AddVertex( &foundVertices, triangle.i1 );
-				(void)b3AddVertex( &foundVertices, triangle.i2 );
-				(void)b3AddVertex( &foundVertices, triangle.i3 );
-
 				acceptedManifolds[acceptedManifoldCount++] = manifold;
 			}
 			else if ( manifold->feature == b3_featureHullFace )
@@ -796,13 +779,6 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 				float cosNormalAngle = b3Dot( manifold->triangleNormal, manifold->normal );
 				if ( cosNormalAngle > 0.5f )
 				{
-					(void)b3AddEdge( &foundEdges, triangle.i1, triangle.i2 );
-					(void)b3AddEdge( &foundEdges, triangle.i2, triangle.i3 );
-					(void)b3AddEdge( &foundEdges, triangle.i3, triangle.i1 );
-					(void)b3AddVertex( &foundVertices, triangle.i1 );
-					(void)b3AddVertex( &foundVertices, triangle.i2 );
-					(void)b3AddVertex( &foundVertices, triangle.i3 );
-
 					acceptedManifolds[acceptedManifoldCount++] = manifold;
 				}
 				else
@@ -816,12 +792,6 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 					if ( minSeparation < -2.0f * linearSlop )
 					{
 						// Deep overlap
-						(void)b3AddEdge( &foundEdges, triangle.i1, triangle.i2 );
-						(void)b3AddEdge( &foundEdges, triangle.i2, triangle.i3 );
-						(void)b3AddEdge( &foundEdges, triangle.i3, triangle.i1 );
-						(void)b3AddVertex( &foundVertices, triangle.i1 );
-						(void)b3AddVertex( &foundVertices, triangle.i2 );
-						(void)b3AddVertex( &foundVertices, triangle.i3 );
 						acceptedManifolds[acceptedManifoldCount++] = manifold;
 					}
 					else
@@ -846,6 +816,20 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	B3_ASSERT( acceptedManifoldCount <= triangleCount );
 	B3_ASSERT( tentativeManifoldCount <= triangleCount );
 	B3_ASSERT( tentativeTriangleCount <= triangleCount );
+
+	b3FoundEdges foundEdges = b3CreateFoundEdges( &arena, 3 * manifoldCount );
+	b3FoundVertices foundVertices = b3CreateFoundVertices( &arena, 3 * manifoldCount );
+
+	for ( int i = 0; i < acceptedManifoldCount; ++i )
+	{
+		b3LocalManifold* m = acceptedManifolds[i];
+		(void)b3AddEdge( &foundEdges, m->i1, m->i2 );
+		(void)b3AddEdge( &foundEdges, m->i2, m->i3 );
+		(void)b3AddEdge( &foundEdges, m->i3, m->i1 );
+		(void)b3AddVertex( &foundVertices, m->i1 );
+		(void)b3AddVertex( &foundVertices, m->i2 );
+		(void)b3AddVertex( &foundVertices, m->i3 );
+	}
 
 	if ( shapeB->type == b3_sphereShape )
 	{
