@@ -128,6 +128,16 @@ static uint8_t* b3GetMeshFlagsWrite( b3MeshData* mesh )
 	return (uint8_t*)( (intptr_t)mesh + mesh->flagsOffset );
 }
 
+static int8_t* b3GetMeshEdgeAnglesWrite( b3MeshData* mesh )
+{
+	if ( mesh->edgeAngleOffset == 0 )
+	{
+		return NULL;
+	}
+
+	return (int8_t*)( (intptr_t)mesh + mesh->edgeAngleOffset );
+}
+
 static int b3GetNodeHeight( const b3MeshNode* node )
 {
 	if ( b3IsLeaf( node ) )
@@ -1034,6 +1044,60 @@ typedef struct
 	uint8_t triangleEdgeIndex2;
 } b3MeshEdge;
 
+#define B3_EDGE_ANGLE_STEPS 127.0f
+
+static int8_t b3QuantizeEdgeAngle( float radians )
+{
+	float scaled = radians * ( B3_EDGE_ANGLE_STEPS / B3_PI );
+	int quantized = scaled >= 0.0f ? (int)( scaled + 0.5f ) : -(int)( 0.5f - scaled );
+	return (int8_t)b3ClampInt( quantized, -127, 127 );
+}
+
+bool b3GetMeshNeighborNormal( const b3Mesh* mesh, int triangleIndex, int edgeIndex, b3Vec3* normal )
+{
+	const b3MeshData* data = mesh->data;
+	B3_ASSERT( 0 <= triangleIndex && triangleIndex < data->triangleCount );
+	B3_ASSERT( 0 <= edgeIndex && edgeIndex < 3 );
+
+	const int8_t* edgeAngles = b3GetMeshEdgeAngles( data );
+	if ( edgeAngles == NULL )
+	{
+		return false;
+	}
+
+	b3Vec3 scale = mesh->scale;
+	if ( scale.x * scale.y * scale.z < 0.0f )
+	{
+		// Reflected mesh.
+		edgeIndex = 2 - edgeIndex;
+	}
+
+	int8_t quantized = edgeAngles[3 * triangleIndex + edgeIndex];
+	if ( quantized == B3_BOUNDARY_EDGE_ANGLE )
+	{
+		return false;
+	}
+
+	const b3MeshTriangle* triangles = b3GetMeshTriangles( data );
+	const b3Vec3* vertices = b3GetMeshVertices( data );
+	b3MeshTriangle triangle = triangles[triangleIndex];
+	int indices[3] = { triangle.index1, triangle.index2, triangle.index3 };
+
+	b3Vec3 a = vertices[indices[edgeIndex]];
+	b3Vec3 b = vertices[indices[( edgeIndex + 1 ) % 3]];
+	b3Vec3 c = vertices[indices[( edgeIndex + 2 ) % 3]];
+	b3Vec3 n = b3Normalize( b3Cross( b3Sub( b, a ), b3Sub( c, a ) ) );
+	b3Vec3 outward = b3Cross( b3Normalize( b3Sub( b, a ) ), n );
+
+	b3CosSin cs = b3ComputeCosSin( (float)quantized * ( B3_PI / B3_EDGE_ANGLE_STEPS ) );
+	b3Vec3 unscaled = b3Add( b3MulSV( cs.cosine, n ), b3MulSV( cs.sine, outward ) );
+
+	// Handle non-uniform scale.
+	b3Vec3 invScale = { 1.0f / scale.x, 1.0f / scale.y, 1.0f / scale.z };
+	*normal = b3Normalize( b3Mul( invScale, unscaled ) );
+	return true;
+}
+
 #define NAME b3EdgeMap
 #define KEY_TY uint64_t
 #define VAL_TY int
@@ -1067,9 +1131,17 @@ static void b3IdentifyEdges( b3MeshData* mesh )
 	b3MeshTriangle* triangles = b3GetMeshTrianglesWrite( mesh );
 	const b3Vec3* vertices = b3GetMeshVertices( mesh );
 	uint8_t* flags = b3GetMeshFlagsWrite( mesh );
+	int8_t* edgeAngles = b3GetMeshEdgeAnglesWrite( mesh );
+	B3_ASSERT( edgeAngles != NULL );
 
 	int triangleCount = mesh->triangleCount;
 	int edgeCount = 3 * triangleCount;
+
+	for ( int i = 0; i < edgeCount; ++i )
+	{
+		edgeAngles[i] = B3_BOUNDARY_EDGE_ANGLE;
+	}
+
 	b3MeshEdge* edges = B3_ALLOC( b3MeshEdge, edgeCount );
 	b3Vec3* normals = B3_ALLOC( b3Vec3, triangleCount );
 
@@ -1199,11 +1271,27 @@ static void b3IdentifyEdges( b3MeshData* mesh )
 		b3Vec3 v2 = vertices[i2];
 		b3Vec3 v3 = vertices[i3];
 		b3Vec3 p = vertices[opposite];
+		b3Vec3 n1 = normals[edge->triangle1];
+		b3Vec3 n2 = normals[edge->triangle2];
+
+		// Quantize the angles between neighboring normals.
+		int indices1[3] = { i1, i2, i3 };
+		int indices2[3] = { j1, j2, j3 };
+		int k1 = edge->triangleEdgeIndex1;
+		int k2 = edge->triangleEdgeIndex2;
+		if ( indices1[k1] == indices2[( k2 + 1 ) % 3] )
+		{
+			b3Vec3 a = vertices[indices1[k1]];
+			b3Vec3 b = vertices[indices1[( k1 + 1 ) % 3]];
+			b3Vec3 outward = b3Cross( b3Normalize( b3Sub( b, a ) ), n1 );
+			float angle = b3Atan2( b3Dot( n2, outward ), b3Dot( n2, n1 ) );
+			int8_t quantized = b3QuantizeEdgeAngle( angle );
+			edgeAngles[3 * edge->triangle1 + k1] = quantized;
+			edgeAngles[3 * edge->triangle2 + k2] = quantized;
+		}
 
 		float cos5Deg = 0.9962f;
 		float signedVolume = b3SignedVolume( v1, v2, v3, p );
-		b3Vec3 n1 = normals[edge->triangle1];
-		b3Vec3 n2 = normals[edge->triangle2];
 		float cosAngle = b3Dot( n1, n2 );
 		if ( signedVolume > 0.0f || cosAngle > cos5Deg )
 		{
@@ -1740,6 +1828,12 @@ b3MeshData* b3CreateMesh( const b3MeshDef* def, int* degenerateTriangleIndices, 
 	byteCount += b3AlignUp8( triangleCount * sizeof( uint8_t ) );
 	int flagsOffset = (int)byteCount;
 	byteCount += b3AlignUp8( triangleCount * sizeof( uint8_t ) );
+	int edgeAngleOffset = 0;
+	if ( def->identifyEdges )
+	{
+		edgeAngleOffset = (int)byteCount;
+		byteCount += b3AlignUp8( 3 * triangleCount * sizeof( int8_t ) );
+	}
 
 	b3MeshData* mesh = b3Alloc( byteCount );
 
@@ -1761,6 +1855,7 @@ b3MeshData* b3CreateMesh( const b3MeshDef* def, int* degenerateTriangleIndices, 
 	mesh->materialOffset = materialIndicesOffset;
 	mesh->materialCount = materialCount;
 	mesh->flagsOffset = flagsOffset;
+	mesh->edgeAngleOffset = edgeAngleOffset;
 
 	b3MeshNode* nodes = b3GetMeshNodesWrite( mesh );
 	b3MeshTriangle* triangles = b3GetMeshTrianglesWrite( mesh );

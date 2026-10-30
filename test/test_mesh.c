@@ -443,6 +443,220 @@ static int MeshMirroredFlags( void )
 	return 0;
 }
 
+// Brute force search for the triangle across edge a-b, walked b to a with consistent winding
+static int FindNeighbor( const b3Mesh* mesh, int triangleIndex, int a, int b, int* edgeIndex )
+{
+	for ( int i = 0; i < mesh->data->triangleCount; ++i )
+	{
+		if ( i == triangleIndex )
+		{
+			continue;
+		}
+
+		b3Triangle triangle = b3GetMeshTriangle( mesh, i );
+		int indices[3] = { triangle.i1, triangle.i2, triangle.i3 };
+		for ( int j = 0; j < 3; ++j )
+		{
+			if ( indices[j] == b && indices[( j + 1 ) % 3] == a )
+			{
+				*edgeIndex = j;
+				return i;
+			}
+		}
+	}
+
+	return B3_NULL_INDEX;
+}
+
+// Both sides of an edge store the same angle
+static bool EdgeAnglesAreSymmetric( const b3MeshData* data, int* boundaryCount )
+{
+	b3Mesh mesh = { .data = data, .scale = b3Vec3_one };
+	const int8_t* edgeAngles = b3GetMeshEdgeAngles( data );
+	*boundaryCount = 0;
+
+	for ( int i = 0; i < data->triangleCount; ++i )
+	{
+		b3Triangle triangle = b3GetMeshTriangle( &mesh, i );
+		int indices[3] = { triangle.i1, triangle.i2, triangle.i3 };
+
+		for ( int k = 0; k < 3; ++k )
+		{
+			int8_t angle = edgeAngles[3 * i + k];
+			if ( angle == B3_BOUNDARY_EDGE_ANGLE )
+			{
+				*boundaryCount += 1;
+				continue;
+			}
+
+			int edgeIndex = -1;
+			int neighbor = FindNeighbor( &mesh, i, indices[k], indices[( k + 1 ) % 3], &edgeIndex );
+			if ( neighbor == B3_NULL_INDEX || edgeAngles[3 * neighbor + edgeIndex] != angle )
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+// The rebuilt neighbor normal must match the real one under any scale. A non-uniform scale
+// stretches the quantization error by up to the ratio of its largest and smallest components.
+static bool NeighborNormalsMatch( const b3MeshData* data, b3Vec3 scale )
+{
+	b3Mesh mesh = { .data = data, .scale = scale };
+
+	b3Vec3 s = b3Abs( scale );
+	float spread = b3MaxFloat( s.x, b3MaxFloat( s.y, s.z ) ) / b3MinFloat( s.x, b3MinFloat( s.y, s.z ) );
+	float tolerance = 0.8f * spread * B3_PI / 180.0f;
+	float cosTolerance = cosf( tolerance );
+
+	for ( int i = 0; i < data->triangleCount; ++i )
+	{
+		b3Triangle triangle = b3GetMeshTriangle( &mesh, i );
+		int indices[3] = { triangle.i1, triangle.i2, triangle.i3 };
+
+		for ( int k = 0; k < 3; ++k )
+		{
+			int edgeIndex = -1;
+			int neighbor = FindNeighbor( &mesh, i, indices[k], indices[( k + 1 ) % 3], &edgeIndex );
+
+			b3Vec3 rebuilt;
+			bool found = b3GetMeshNeighborNormal( &mesh, i, k, &rebuilt );
+			if ( found != ( neighbor != B3_NULL_INDEX ) )
+			{
+				return false;
+			}
+
+			if ( found == false )
+			{
+				continue;
+			}
+
+			b3Triangle other = b3GetMeshTriangle( &mesh, neighbor );
+			b3Vec3 e1 = b3Sub( other.vertices[1], other.vertices[0] );
+			b3Vec3 e2 = b3Sub( other.vertices[2], other.vertices[0] );
+			b3Vec3 actual = b3Normalize( b3Cross( e1, e2 ) );
+			if ( b3Dot( rebuilt, actual ) < cosTolerance )
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+// Positive angles are convex, negative are concave. A right angle sits on a rounding boundary.
+static bool HasRightAngle( const b3MeshData* data, int sign )
+{
+	const int8_t* edgeAngles = b3GetMeshEdgeAngles( data );
+	for ( int i = 0; i < 3 * data->triangleCount; ++i )
+	{
+		int angle = sign * edgeAngles[i];
+		if ( angle == 63 || angle == 64 )
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static int MeshEdgeAngles( void )
+{
+	{
+		b3MeshData* grid = b3CreateGridMesh( 4, 4, 1.0f, 0, true );
+		ENSURE( b3GetMeshEdgeAngles( grid ) != NULL );
+
+		int boundaryCount = 0;
+		ENSURE( EdgeAnglesAreSymmetric( grid, &boundaryCount ) );
+		ENSURE( boundaryCount == 16 );
+
+		const int8_t* edgeAngles = b3GetMeshEdgeAngles( grid );
+		for ( int i = 0; i < 3 * grid->triangleCount; ++i )
+		{
+			ENSURE( edgeAngles[i] == 0 || edgeAngles[i] == B3_BOUNDARY_EDGE_ANGLE );
+		}
+
+		b3DestroyMesh( grid );
+	}
+
+	{
+		b3MeshData* grid = b3CreateGridMesh( 4, 4, 1.0f, 0, false );
+		ENSURE( b3GetMeshEdgeAngles( grid ) == NULL );
+		b3DestroyMesh( grid );
+	}
+
+	b3Vec3 vertices[VALLEY_VERTEX_COUNT];
+	int32_t indices[3 * VALLEY_TRIANGLE_COUNT];
+	MakeValley( vertices, indices );
+	b3MeshDef def = MakeValleyDef( vertices, indices );
+
+	b3MeshData* meshes[] = {
+		b3CreateMesh( &def, NULL, 0 ),
+		b3CreateBoxMesh( b3Vec3_zero, (b3Vec3){ 1.0f, 2.0f, 3.0f }, true ),
+		b3CreateWaveMesh( 8, 8, 1.0f, 0.5f, 0.2f, 0.15f ),
+		b3CreateTorusMesh( 8, 6, 2.0f, 0.5f ),
+	};
+
+	b3MeshData* valley = meshes[0];
+	b3MeshData* box = meshes[1];
+	ENSURE( HasRightAngle( valley, -1 ) );
+	ENSURE( HasRightAngle( box, 1 ) );
+
+	int boundaryCount = 0;
+	ENSURE( EdgeAnglesAreSymmetric( box, &boundaryCount ) );
+	ENSURE( boundaryCount == 0 );
+
+	b3Vec3 scales[] = {
+		{ 1.0f, 1.0f, 1.0f },	 { 3.0f, 3.0f, 3.0f },	{ -1.0f, 1.0f, 1.0f },
+		{ 2.0f, 0.5f, 1.5f },	 { 0.5f, -2.0f, 1.0f }, { -1.0f, -1.0f, -1.0f },
+	};
+
+	for ( int i = 0; i < ARRAY_COUNT( meshes ); ++i )
+	{
+		ENSURE( meshes[i] != NULL );
+		ENSURE( EdgeAnglesAreSymmetric( meshes[i], &boundaryCount ) );
+
+		for ( int j = 0; j < ARRAY_COUNT( scales ); ++j )
+		{
+			ENSURE( NeighborNormalsMatch( meshes[i], scales[j] ) );
+		}
+
+		b3DestroyMesh( meshes[i] );
+	}
+
+	{
+		// Three triangles on edge 0-1 are non-manifold. The last two share edge 5-6 walked the
+		// same way, which is inconsistent winding. Neither gets an angle.
+		b3Vec3 finVertices[] = {
+			{ 0.0f, 0.0f, 0.0f }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, -1.0f },
+			{ 0.0f, 1.0f, 0.0f }, { 5.0f, 0.0f, 0.0f }, { 5.0f, 0.0f, 1.0f }, { 5.0f, 1.0f, 0.0f },
+		};
+
+		int32_t finIndices[] = {
+			0, 1, 2, 1, 0, 3, 0, 1, 4, 5, 6, 7, 5, 6, 2,
+		};
+
+		b3MeshDef finDef = { 0 };
+		finDef.vertices = finVertices;
+		finDef.vertexCount = ARRAY_COUNT( finVertices );
+		finDef.indices = finIndices;
+		finDef.triangleCount = ARRAY_COUNT( finIndices ) / 3;
+		finDef.identifyEdges = true;
+		b3MeshData* fin = b3CreateMesh( &finDef, NULL, 0 );
+		ENSURE( fin != NULL );
+
+		ENSURE( EdgeAnglesAreSymmetric( fin, &boundaryCount ) );
+		ENSURE( boundaryCount == 15 );
+		b3DestroyMesh( fin );
+	}
+
+	return 0;
+}
+
 // A wide box sliding over a fine grid sits on hundreds of flat internal edges. With no friction
 // any manifold off the face normal is a ghost that slows or lifts the box.
 static int WideHullSlide( b3Vec3 meshScale )
@@ -580,6 +794,7 @@ int MeshTest( void )
 	RUN_SUBTEST( MeshWideHullSlide );
 	RUN_SUBTEST( MeshManyTriangles );
 	RUN_SUBTEST( MeshMirroredFlags );
+	RUN_SUBTEST( MeshEdgeAngles );
 
 	return 0;
 }

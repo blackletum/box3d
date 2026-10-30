@@ -342,6 +342,17 @@ B3_INLINE const uint8_t* b3GetMeshFlags( const b3MeshData* mesh )
 	return (const uint8_t*)( (intptr_t)mesh + mesh->flagsOffset );
 }
 
+// Get read only quantized angles between neighboring triangle normals.
+B3_INLINE const int8_t* b3GetMeshEdgeAngles( const b3MeshData* mesh )
+{
+	if ( mesh->edgeAngleOffset == 0 )
+	{
+		return NULL;
+	}
+
+	return (const int8_t*)( (intptr_t)mesh + mesh->edgeAngleOffset );
+}
+
 /// Create a grid mesh along the x and z axes.
 /// @param xCount the number of rows in the x direction
 /// @param zCount the number of rows in the z direction

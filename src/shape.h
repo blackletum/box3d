@@ -183,6 +183,8 @@ static inline b3Triangle b3GetMeshTriangle( const b3Mesh* mesh, int triangleInde
 	return result;
 }
 
+bool b3GetMeshNeighborNormal( const b3Mesh* mesh, int triangleIndex, int edgeIndex, b3Vec3* normal );
+
 bool b3IsValidMesh( const b3MeshData* meshData );
 
 static inline bool b3ShouldShapesCollide( b3Filter filterA, b3Filter filterB )
