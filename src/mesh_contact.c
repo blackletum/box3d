@@ -557,15 +557,6 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	float restOffset = B3_MESH_REST_OFFSET;
 	bool enableSpeculative = contact->flags & b3_enableSpeculativePoints;
 
-	// Make room for clip points
-	int pointBufferCapacity = B3_MAX_POINTS_PER_TRIANGLE * triangleCount;
-
-	b3LocalManifoldPoint* pointBuffer = b3Bump( &arena, pointBufferCapacity * sizeof( b3LocalManifoldPoint ) );
-	int totalPointCount = 0;
-
-	b3LocalManifold* manifoldBuffer = b3Bump( &arena, triangleCount * sizeof( b3LocalManifold ) );
-	int manifoldCount = 0;
-
 	b3TriangleCache* triangleCaches = meshContact->triangleCache.data;
 
 	const b3HullData* hullB = shapeB->type == b3_hullShape ? shapeB->hull : NULL;
@@ -701,6 +692,15 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 			survivorCount += 1;
 		}
 	}
+
+	// Make room for clip points. Additional capacity for a heavy clip.
+	int pointBufferCapacity = B3_MAX_POINTS_PER_TRIANGLE * survivorCount + 2 * B3_MAX_CLIP_POINTS;
+
+	b3LocalManifoldPoint* pointBuffer = b3Bump( &arena, pointBufferCapacity * sizeof( b3LocalManifoldPoint ) );
+	int totalPointCount = 0;
+
+	b3LocalManifold* manifoldBuffer = b3Bump( &arena, survivorCount * sizeof( b3LocalManifold ) );
+	int manifoldCount = 0;
 
 	for ( int survivorIndex = 0; survivorIndex < survivorCount && totalPointCount + 3 < pointBufferCapacity; ++survivorIndex )
 	{
