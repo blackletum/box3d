@@ -441,7 +441,7 @@ public:
 		m_runCount = 0;
 		m_failure = false;
 		m_autoGenerate = false;
-		m_collide = true;
+		m_collide = false;
 		m_stepWhilePaused = true;
 
 		Generate();
@@ -544,7 +544,14 @@ public:
 		bodyDef.type = b3_dynamicBody;
 
 		b3ShapeDef shapeDef = b3DefaultShapeDef();
-		shapeDef.baseMaterial.rollingResistance = m_shapeType == e_capsule ? 0.4f : 0.1f;
+		if (m_shapeType == e_capsule || m_shapeType == e_sphere)
+		{
+			shapeDef.baseMaterial.rollingResistance = 0.4f;
+		}
+		else
+		{
+			shapeDef.baseMaterial.rollingResistance = 0.1f;
+		}
 
 		// Don't allow shapes to collide with each other. This
 		// makes isolating failures easier.
@@ -554,10 +561,11 @@ public:
 			shapeDef.filter.maskBits = 1;
 		}
 
-		g_randomSeed = (uint32_t)b3GetTicks();
+		// A non-zero seed replays a generation reported by the mesh_soak tool
+		g_randomSeed = m_replaySeed != 0 ? m_replaySeed : (uint32_t)b3GetTicks();
 
 		bool simulateAll = true;
-		// g_randomSeed = 1910133196;
+		//g_randomSeed = 2772533094;
 
 		m_runCount += 1;
 		m_stepCount = 0;
@@ -570,7 +578,7 @@ public:
 				b3Vec3 linearVelocity = RandomVec3Uniform( -1.0f, 1.0f );
 				b3Vec3 angularVelocity = RandomVec3Uniform( -5.0f, 5.0f );
 
-				if ( simulateAll || ( i == 19 && j == 20 ) )
+				if ( simulateAll || ( i == 9 && j == 3 ) )
 				{
 					bodyDef.position = { 0.5f * ( i - 0.5f * m_gridCount ), 5.0f, 0.5f * ( j - 0.5f * m_gridCount ) };
 					bodyDef.linearVelocity = linearVelocity;
@@ -630,6 +638,8 @@ public:
 		{
 			Generate();
 		}
+
+		ImGui::InputScalar( "Seed", ImGuiDataType_U32, &m_replaySeed );
 
 		if ( ImGui::Button( "Generate" ) )
 		{
@@ -743,6 +753,7 @@ public:
 	bool m_failure;
 	bool m_autoGenerate;
 	bool m_collide;
+	uint32_t m_replaySeed = 0;
 };
 
 static int sampleMeshDrop = RegisterSample( "Continuous", "Mesh Drop", MeshDrop::Create );
