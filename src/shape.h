@@ -129,6 +129,8 @@ float b3ComputeHullProjectedArea( const b3HullData* hull, b3Vec3 direction );
 b3Triangle b3GetHeightFieldTriangle( const b3HeightFieldData* heightField, int triangleIndex );
 int b3GetHeightFieldMaterial( const b3HeightFieldData* heightField, int triangleIndex );
 
+bool b3GetHeightFieldNeighborNormal( const b3HeightFieldData* heightField, int triangleIndex, int edgeIndex, b3Vec3* normal );
+
 static inline int b3GetHeightFieldTriangleCount( const b3HeightFieldData* heightField )
 {
 	int cellCount = ( heightField->rowCount - 1 ) * ( heightField->columnCount - 1 );
@@ -184,6 +186,17 @@ static inline b3Triangle b3GetMeshTriangle( const b3Mesh* mesh, int triangleInde
 }
 
 bool b3GetMeshNeighborNormal( const b3Mesh* mesh, int triangleIndex, int edgeIndex, b3Vec3* normal );
+
+static inline bool b3GetNeighborNormal( const b3Shape* shape, int triangleIndex, int edgeIndex, b3Vec3* normal )
+{
+	if ( shape->type == b3_meshShape )
+	{
+		return b3GetMeshNeighborNormal( &shape->mesh, triangleIndex, edgeIndex, normal );
+	}
+
+	B3_ASSERT( shape->type == b3_heightShape );
+	return b3GetHeightFieldNeighborNormal( shape->heightField, triangleIndex, edgeIndex, normal );
+}
 
 bool b3IsValidMesh( const b3MeshData* meshData );
 

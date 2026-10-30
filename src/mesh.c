@@ -1092,6 +1092,18 @@ bool b3GetMeshNeighborNormal( const b3Mesh* mesh, int triangleIndex, int edgeInd
 	b3CosSin cs = b3ComputeCosSin( (float)quantized * ( B3_PI / B3_EDGE_ANGLE_STEPS ) );
 	b3Vec3 unscaled = b3Add( b3MulSV( cs.cosine, n ), b3MulSV( cs.sine, outward ) );
 
+	b3Vec3 absScale = b3Abs( scale );
+	if ( absScale.y == absScale.x && absScale.z == absScale.x )
+	{
+		// Shortcut for uniform scale. Common case.
+		*normal = (b3Vec3){
+			scale.x < 0.0f ? -unscaled.x : unscaled.x,
+			scale.y < 0.0f ? -unscaled.y : unscaled.y,
+			scale.z < 0.0f ? -unscaled.z : unscaled.z,
+		};
+		return true;
+	}
+
 	// Handle non-uniform scale.
 	b3Vec3 invScale = { 1.0f / scale.x, 1.0f / scale.y, 1.0f / scale.z };
 	*normal = b3Normalize( b3Mul( invScale, unscaled ) );

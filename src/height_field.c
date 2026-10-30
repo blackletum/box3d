@@ -585,6 +585,54 @@ int b3GetHeightFieldMaterial( const b3HeightFieldData* heightField, int triangle
 	return b3GetHeightFieldMaterialIndices( heightField )[cellIndex];
 }
 
+bool b3GetHeightFieldNeighborNormal( const b3HeightFieldData* heightField, int triangleIndex, int edgeIndex, b3Vec3* normal )
+{
+	B3_ASSERT( 0 <= triangleIndex && triangleIndex < b3GetHeightFieldTriangleCount( heightField ) );
+	B3_ASSERT( 0 <= edgeIndex && edgeIndex < 3 );
+
+	if ( heightField->clockwise )
+	{
+		// Reflected
+		edgeIndex = 2 - edgeIndex;
+	}
+
+	int cellColumnCount = heightField->columnCount - 1;
+	int cellRowCount = heightField->rowCount - 1;
+	int cellIndex = triangleIndex >> 1;
+	int row = cellIndex / cellColumnCount;
+	int column = cellIndex - row * cellColumnCount;
+	bool odd = ( triangleIndex & 1 ) == 1;
+
+	// Get the row and column for the neighbor cell.
+	if ( edgeIndex == 0 )
+	{
+		column += odd ? 1 : -1;
+	}
+	else if ( edgeIndex == 2 )
+	{
+		row += odd ? 1 : -1;
+	}
+
+	if ( row < 0 || row >= cellRowCount || column < 0 || column >= cellColumnCount )
+	{
+		return false;
+	}
+
+	int neighborCell = row * cellColumnCount + column;
+
+	const uint8_t* materialIndices = b3GetHeightFieldMaterialIndices( heightField );
+	if ( materialIndices[neighborCell] == B3_HEIGHT_FIELD_HOLE )
+	{
+		return false;
+	}
+
+	b3Triangle neighbor = b3GetHeightFieldTriangle( heightField, 2 * neighborCell + ( odd ? 0 : 1 ) );
+	b3Vec3 e1 = b3Sub( neighbor.vertices[1], neighbor.vertices[0] );
+	b3Vec3 e2 = b3Sub( neighbor.vertices[2], neighbor.vertices[0] );
+	*normal = b3Normalize( b3Cross( e1, e2 ) );
+	return true;
+}
+
 b3AABB b3ComputeHeightFieldAABB( const b3HeightFieldData* shape, b3Transform transform )
 {
 	return b3AABB_Transform( transform, shape->aabb );
