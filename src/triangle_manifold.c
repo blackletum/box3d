@@ -260,8 +260,8 @@ static b3SeparatingAxis b3QueryTriangleAndCapsuleEdges( const b3Vec3* vertices, 
 	};
 }
 
-static void b3BuildTriangleAndCapsuleFaceContact( b3LocalManifold* manifold, const b3Vec3* triangle, b3Plane plane,
-												  const b3Capsule* capsule )
+void b3BuildTriangleAndCapsuleFaceContact( b3LocalManifold* manifold, const b3Vec3* triangle, b3Plane plane,
+										   const b3Capsule* capsule )
 {
 	B3_ASSERT( manifold->pointCount == 0 );
 

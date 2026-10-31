@@ -564,8 +564,8 @@ public:
 		// A non-zero seed replays a generation reported by the mesh_soak tool
 		g_randomSeed = m_replaySeed != 0 ? m_replaySeed : (uint32_t)b3GetTicks();
 
-		bool simulateAll = true;
-		//g_randomSeed = 2772533094;
+		bool simulateAll = false;
+		g_randomSeed = 2256131175;
 
 		m_runCount += 1;
 		m_stepCount = 0;
@@ -578,7 +578,7 @@ public:
 				b3Vec3 linearVelocity = RandomVec3Uniform( -1.0f, 1.0f );
 				b3Vec3 angularVelocity = RandomVec3Uniform( -5.0f, 5.0f );
 
-				if ( simulateAll || ( i == 9 && j == 3 ) )
+				if ( simulateAll || ( i == 31 && j == 20 ) )
 				{
 					bodyDef.position = { 0.5f * ( i - 0.5f * m_gridCount ), 5.0f, 0.5f * ( j - 0.5f * m_gridCount ) };
 					bodyDef.linearVelocity = linearVelocity;

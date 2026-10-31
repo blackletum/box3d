@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Erin Catto
 // SPDX-License-Identifier: MIT
 
+#include "ghost_collisions.h"
 #include "human.h"
 #include "mesh_loader.h"
 #include "sample.h"
@@ -1622,54 +1623,11 @@ public:
 
 static int sampleHollowBox = RegisterSample( "Mesh", "Hollow Box", HollowBox::Create );
 
-// Ghost collision scenes. Each ground is a profile in the xy-plane extruded along z and finely
-// tessellated, so a sliding body crosses many internal edges. A manifold that pushes on the body
-// is a ghost when its normal points outside the span of face normals under the body. Those are the
-// ones that block or launch a body.
+// Ghost collision scenes. The scenes, launch and ghost test live in shared/ghost_collisions.c so the
+// headless ghost scan measures the same thing.
 class GhostCollisions : public Sample
 {
 public:
-	enum Scene
-	{
-		e_flat,
-		e_concaveRamp,
-		e_cliff,
-		e_crest,
-		e_bumps,
-		e_tJunction,
-		e_shapeSeam,
-		e_internalEdges,
-		e_sceneCount
-	};
-
-	enum BodyType
-	{
-		e_box,
-		e_capsule,
-		e_uprightCapsule,
-		e_sphere,
-		e_cylinder,
-		e_bodyTypeCount
-	};
-
-	// Mesh variants of the PEEL InternalEdges presets
-	struct PeelPreset
-	{
-		int columnCount;
-		float scaleX;
-		float startZ;
-	};
-
-	static constexpr PeelPreset m_peelPresets[] = {
-		{ 4, 0.1f, -55.0f },
-		{ 4, 0.1f, -54.0f },
-		{ 4, 0.01f, -55.0f },
-		{ 16, 0.01f, -54.0f },
-	};
-
-	static constexpr float m_halfLength = 20.0f;
-	static constexpr float m_halfWidth = 3.0f;
-	static constexpr float m_startX = -16.0f;
 	static constexpr int m_markerCapacity = 256;
 
 	explicit GhostCollisions( SampleContext* context )
@@ -1680,440 +1638,28 @@ public:
 			m_camera->SetView( 90.0f, 20.0f, 30.0f, { 0.0f, 1.0f, 0.0f } );
 		}
 
-		m_cylinder = b3CreateCylinder( 0.4f, 0.4f, -0.2f, 16 );
-		m_peelCylinder = b3CreateCylinder( 2.0f, 1.0f, -1.0f, 16 );
-		m_groundId = b3_nullBodyId;
-		m_bodyId = b3_nullBodyId;
-		m_shapeId = b3_nullShapeId;
-
-		CreateGround();
-		Launch();
+		m_data = CreateGhostCollisions( m_worldId, GetDefaultGhostSettings() );
 	}
 
 	~GhostCollisions() override
 	{
-		DestroyMeshes();
-		b3DestroyHull( m_cylinder );
-		b3DestroyHull( m_peelCylinder );
-	}
-
-	void DestroyMeshes()
-	{
-		for ( int i = 0; i < m_meshCount; ++i )
-		{
-			b3DestroyMesh( m_meshes[i] );
-			m_meshes[i] = nullptr;
-		}
-		m_meshCount = 0;
-	}
-
-	// The profile runs in +x with the solid below it. The mirror flips x in the data and the mesh
-	// scale flips it back, so the world geometry is the same either way.
-	void AddStrip( std::vector<b3Vec3>& vertices, std::vector<int32_t>& indices, const b3Vec2* profile, int count,
-				   float zCell ) const
-	{
-		std::vector<b3Vec2> points;
-		points.push_back( profile[0] );
-		for ( int k = 0; k + 1 < count; ++k )
-		{
-			b3Vec2 a = profile[k];
-			b3Vec2 b = profile[k + 1];
-			float length = sqrtf( ( b.x - a.x ) * ( b.x - a.x ) + ( b.y - a.y ) * ( b.y - a.y ) );
-			int n = b3MaxInt( 1, (int)ceilf( length / m_cellSize - 0.01f ) );
-			for ( int s = 1; s <= n; ++s )
-			{
-				float t = (float)s / (float)n;
-				points.push_back( { a.x + t * ( b.x - a.x ), a.y + t * ( b.y - a.y ) } );
-			}
-		}
-
-		int zCount = b3MaxInt( 1, (int)ceilf( 2.0f * m_halfWidth / zCell - 0.01f ) );
-		AddGrid( vertices, indices, points, m_halfWidth, zCount, true );
-	}
-
-	void AddGrid( std::vector<b3Vec3>& vertices, std::vector<int32_t>& indices, const std::vector<b3Vec2>& points,
-				  float halfWidth, int zCount, bool alternate ) const
-	{
-		float sign = m_mirror ? -1.0f : 1.0f;
-		int stride = zCount + 1;
-		int base = (int)vertices.size();
-
-		for ( b3Vec2 p : points )
-		{
-			for ( int j = 0; j <= zCount; ++j )
-			{
-				float z = -halfWidth + 2.0f * halfWidth * (float)j / (float)zCount;
-				vertices.push_back( { sign * p.x, p.y, z } );
-			}
-		}
-
-		bool mirror = m_mirror;
-		auto emit = [&]( int i1, int i2, int i3 ) {
-			indices.push_back( i1 );
-			indices.push_back( mirror ? i3 : i2 );
-			indices.push_back( mirror ? i2 : i3 );
-		};
-
-		int pointCount = (int)points.size();
-		for ( int i = 0; i + 1 < pointCount; ++i )
-		{
-			for ( int j = 0; j < zCount; ++j )
-			{
-				int a = base + i * stride + j;
-				int b = a + 1;
-				int c = a + stride + 1;
-				int d = a + stride;
-
-				// Alternate the diagonal like cooked level geometry
-				if ( alternate && ( ( i + j ) & 1 ) )
-				{
-					emit( a, b, d );
-					emit( b, c, d );
-				}
-				else
-				{
-					emit( a, b, c );
-					emit( c, d, a );
-				}
-			}
-		}
-	}
-
-	void AddMesh( std::vector<b3Vec3>& vertices, std::vector<int32_t>& indices, bool frictionless = false )
-	{
-		b3MeshDef meshDef = {};
-		meshDef.vertices = vertices.data();
-		meshDef.indices = indices.data();
-		meshDef.vertexCount = (int)vertices.size();
-		meshDef.triangleCount = (int)( indices.size() / 3 );
-		meshDef.weldVertices = true;
-		meshDef.weldTolerance = 0.001f;
-		meshDef.identifyEdges = true;
-
-		b3MeshData* mesh = b3CreateMesh( &meshDef, nullptr, 0 );
-		m_meshes[m_meshCount++] = mesh;
-
-		b3Vec3 scale = m_mirror ? b3Vec3{ -1.0f, 1.0f, 1.0f } : b3Vec3_one;
-		b3ShapeDef shapeDef = b3DefaultShapeDef();
-		if ( frictionless )
-		{
-			shapeDef.baseMaterial.friction = 0.0f;
-		}
-		b3CreateMeshShape( m_groundId, &shapeDef, mesh, scale );
-	}
-
-	void CreateGround()
-	{
-		if ( B3_IS_NON_NULL( m_groundId ) )
-		{
-			b3DestroyBody( m_groundId );
-		}
-		DestroyMeshes();
-
-		b3BodyDef bodyDef = b3DefaultBodyDef();
-		m_groundId = b3CreateBody( m_worldId, &bodyDef );
-
-		float h = m_halfLength;
-		m_profile.clear();
-
-		switch ( m_scene )
-		{
-			case e_concaveRamp:
-			{
-				float slope = 8.0f * B3_PI / 180.0f;
-				m_profile = { { -h, h * tanf( slope ) }, { 0.0f, 0.0f }, { h, 0.0f } };
-			}
-			break;
-
-			case e_cliff:
-				m_profile = { { -h, 3.0f }, { 0.0f, 3.0f }, { 0.0f, 0.0f }, { h, 0.0f } };
-				break;
-
-			case e_crest:
-				m_profile = { { -h, 0.0f }, { -10.0f, 0.0f }, { 0.0f, 1.0f }, { 10.0f, 0.0f }, { h, 0.0f } };
-				break;
-
-			case e_bumps:
-				// Gentle folds of a few degrees, the range that only flat edge suppression misses
-				for ( int i = 0; i <= 80; ++i )
-				{
-					float x = -h + 0.5f * (float)i;
-					float y = x < -10.0f ? 0.0f : 0.05f * ( 1.0f - cosf( B3_PI * x ) );
-					m_profile.push_back( { x, y } );
-				}
-				break;
-
-			case e_internalEdges:
-				// PEEL's curved mesh: 32 rows 4 m apart, each step up 1.25 times the last, sliding toward +x
-				for ( int i = 31; i >= 0; --i )
-				{
-					m_profile.push_back( { 62.0f - 4.0f * (float)i, 1.0f + 0.1f * powf( 1.25f, (float)i ) } );
-				}
-				break;
-
-			default:
-				m_profile = { { -h, 0.0f }, { h, 0.0f } };
-				break;
-		}
-
-		std::vector<b3Vec3> vertices;
-		std::vector<int32_t> indices;
-		b3Vec2 left[2] = { { -h, 0.0f }, { 0.0f, 0.0f } };
-		b3Vec2 right[2] = { { 0.0f, 0.0f }, { h, 0.0f } };
-
-		if ( m_scene == e_tJunction )
-		{
-			// Fine and coarse strips share only every other vertex along x = 0
-			AddStrip( vertices, indices, left, 2, 0.5f * m_cellSize );
-			AddStrip( vertices, indices, right, 2, m_cellSize );
-			AddMesh( vertices, indices );
-		}
-		else if ( m_scene == e_shapeSeam )
-		{
-			// Two mesh shapes meeting at x = 0, so the seam spans two contacts
-			AddStrip( vertices, indices, left, 2, m_cellSize );
-			AddMesh( vertices, indices );
-
-			vertices.clear();
-			indices.clear();
-			AddStrip( vertices, indices, right, 2, m_cellSize );
-			AddMesh( vertices, indices );
-		}
-		else if ( m_scene == e_internalEdges )
-		{
-			// The mesh has no friction and the ground plane under it does, as in PEEL
-			const PeelPreset& preset = m_peelPresets[m_peelPreset];
-			int zCount = preset.columnCount - 1;
-			float halfWidth = 20.0f * preset.scaleX * (float)zCount;
-			AddGrid( vertices, indices, m_profile, halfWidth, zCount, false );
-			AddMesh( vertices, indices, true );
-
-			b3BoxHull box = b3MakeOffsetBoxHull( 140.0f, 1.0f, 30.0f, { 65.0f, -1.0f, 0.0f } );
-			b3ShapeDef shapeDef = b3DefaultShapeDef();
-			b3CreateHullShape( m_groundId, &shapeDef, &box.base );
-		}
-		else
-		{
-			AddStrip( vertices, indices, m_profile.data(), (int)m_profile.size(), m_cellSize );
-			AddMesh( vertices, indices );
-		}
-	}
-
-	void Launch()
-	{
-		if ( B3_IS_NON_NULL( m_bodyId ) )
-		{
-			b3DestroyBody( m_bodyId );
-		}
-
-		// PEEL drops its bodies from rest, sized in meters rather than tenths
-		bool peel = m_scene == e_internalEdges;
-		float boxHalf = peel ? 1.0f : 0.2f;
-		float capsuleRadius = peel ? 1.0f : 0.2f;
-		float capsuleHalf = peel ? 2.0f : 0.4f;
-		float sphereRadius = peel ? 1.0f : 0.25f;
-
-		b3BodyDef bodyDef = b3DefaultBodyDef();
-		bodyDef.type = b3_dynamicBody;
-		b3Quat yaw = b3MakeQuatFromAxisAngle( b3Vec3_axisY, m_yaw * B3_PI / 180.0f );
-
-		if ( peel )
-		{
-			bodyDef.position = { m_peelPresets[m_peelPreset].startZ, 80.0f, 0.0f };
-			bodyDef.rotation = yaw;
-		}
-		else
-		{
-			int segment = 0;
-			for ( int k = 0; k + 1 < (int)m_profile.size(); ++k )
-			{
-				if ( m_profile[k].x <= m_startX && m_startX < m_profile[k + 1].x )
-				{
-					segment = k;
-					break;
-				}
-			}
-
-			b3Vec2 a = m_profile[segment];
-			b3Vec2 b = m_profile[segment + 1];
-			float length = sqrtf( ( b.x - a.x ) * ( b.x - a.x ) + ( b.y - a.y ) * ( b.y - a.y ) );
-			b3Vec2 d = { ( b.x - a.x ) / length, ( b.y - a.y ) / length };
-			b3Vec2 n = { -d.y, d.x };
-			float y = a.y + ( m_startX - a.x ) * d.y / d.x;
-
-			float lift = boxHalf;
-			if ( m_bodyType == e_sphere )
-			{
-				lift = sphereRadius;
-			}
-			else if ( m_bodyType == e_uprightCapsule )
-			{
-				lift = capsuleHalf + capsuleRadius;
-			}
-			lift += 0.01f;
-
-			bodyDef.position = { m_startX + lift * n.x, y + lift * n.y, 0.0f };
-			b3Quat slope = b3MakeQuatFromAxisAngle( b3Vec3_axisZ, atan2f( d.y, d.x ) );
-			bodyDef.rotation = b3MulQuat( slope, yaw );
-			bodyDef.linearVelocity = { m_speed * d.x, m_speed * d.y, 0.0f };
-		}
-
-		bodyDef.motionLocks.angularX = m_fixedRotation;
-		bodyDef.motionLocks.angularY = m_fixedRotation;
-		bodyDef.motionLocks.angularZ = m_fixedRotation;
-		bodyDef.enableSleep = false;
-		bodyDef.name = "slider";
-		m_bodyId = b3CreateBody( m_worldId, &bodyDef );
-
-		b3ShapeDef shapeDef = b3DefaultShapeDef();
-		shapeDef.baseMaterial.friction = m_friction;
-		shapeDef.enableSpeculativeContact = m_speculative;
-
-		switch ( m_bodyType )
-		{
-			case e_box:
-			{
-				b3BoxHull box = peel ? b3MakeBoxHull( 1.0f, 1.0f, 1.0f ) : b3MakeBoxHull( 0.4f, 0.2f, 0.4f );
-				m_shapeId = b3CreateHullShape( m_bodyId, &shapeDef, &box.base );
-			}
-			break;
-
-			case e_capsule:
-			{
-				b3Capsule capsule = { { 0.0f, 0.0f, -capsuleHalf }, { 0.0f, 0.0f, capsuleHalf }, capsuleRadius };
-				m_shapeId = b3CreateCapsuleShape( m_bodyId, &shapeDef, &capsule );
-			}
-			break;
-
-			case e_uprightCapsule:
-			{
-				b3Capsule capsule = { { 0.0f, -capsuleHalf, 0.0f }, { 0.0f, capsuleHalf, 0.0f }, capsuleRadius };
-				m_shapeId = b3CreateCapsuleShape( m_bodyId, &shapeDef, &capsule );
-			}
-			break;
-
-			case e_sphere:
-			{
-				b3Sphere sphere = { b3Vec3_zero, sphereRadius };
-				m_shapeId = b3CreateSphereShape( m_bodyId, &shapeDef, &sphere );
-			}
-			break;
-
-			default:
-				m_shapeId = b3CreateHullShape( m_bodyId, &shapeDef, peel ? m_peelCylinder : m_cylinder );
-				break;
-		}
-
-		m_runGhostCount = 0;
-		m_runSteps = 0;
-	}
-
-	float SegmentAngle( int k ) const
-	{
-		b3Vec2 a = m_profile[k];
-		b3Vec2 b = m_profile[k + 1];
-		return atan2f( b.x - a.x, a.y - b.y );
-	}
-
-	// The normal points from the ground to the body. A hull face can be the reference face, so any
-	// normal within the span of face normals under the body is valid.
-	bool IsGhost( b3Vec3 normal, float xMin, float xMax ) const
-	{
-		float tolerance = 5.0f * B3_PI / 180.0f;
-		if ( b3AbsFloat( normal.z ) > sinf( tolerance ) )
-		{
-			return true;
-		}
-
-		float lower = B3_PI;
-		float upper = -B3_PI;
-		int segmentCount = (int)m_profile.size() - 1;
-		for ( int k = 0; k < segmentCount; ++k )
-		{
-			float x0 = b3MinFloat( m_profile[k].x, m_profile[k + 1].x );
-			float x1 = b3MaxFloat( m_profile[k].x, m_profile[k + 1].x );
-			if ( x1 < xMin || xMax < x0 )
-			{
-				continue;
-			}
-
-			float angle = SegmentAngle( k );
-			lower = b3MinFloat( lower, angle );
-			upper = b3MaxFloat( upper, angle );
-		}
-
-		float angle = atan2f( normal.y, normal.x );
-		return angle < lower - tolerance || upper + tolerance < angle;
+		DestroyGhostCollisions( &m_data );
 	}
 
 	void Step() override
 	{
 		Sample::Step();
 
-		b3Pos center = b3Body_GetWorldCenter( m_bodyId );
-		bool done = center.x > m_halfLength - 1.0f || center.y < -3.0f;
-		if ( m_scene == e_internalEdges )
-		{
-			// Run out onto the ground plane, or give up on a body knocked off the side
-			done = center.x > 100.0f || center.y < -3.0f || m_runSteps > 900;
-		}
-
-		if ( done )
-		{
-			m_runCount += 1;
-			Launch();
-			center = b3Body_GetWorldCenter( m_bodyId );
-		}
-
 		if ( m_didStep )
 		{
-			m_runSteps += 1;
-
-			b3AABB bounds = b3Shape_GetAABB( m_shapeId );
-			float xMin = (float)bounds.lowerBound.x - 0.1f;
-			float xMax = (float)bounds.upperBound.x + 0.1f;
-
-			b3ContactData contacts[8];
-			int contactCount = b3Body_GetContactData( m_bodyId, contacts, 8 );
-			for ( int i = 0; i < contactCount; ++i )
+			GhostReport reports[16];
+			int ghostCount = UpdateGhostCollisions( m_worldId, &m_data, reports, IM_ARRAYSIZE( reports ) );
+			ghostCount = b3MinInt( ghostCount, IM_ARRAYSIZE( reports ) );
+			for ( int i = 0; i < ghostCount; ++i )
 			{
-				bool bodyIsA = B3_ID_EQUALS( contacts[i].shapeIdA, m_shapeId );
-				b3ShapeId otherId = bodyIsA ? contacts[i].shapeIdB : contacts[i].shapeIdA;
-				if ( b3Shape_GetType( otherId ) != b3_meshShape )
-				{
-					continue;
-				}
-
-				for ( int j = 0; j < contacts[i].manifoldCount; ++j )
-				{
-					const b3Manifold* manifold = contacts[i].manifolds + j;
-
-					// Speculative points that never pushed are harmless
-					float impulse = 0.0f;
-					for ( int k = 0; k < manifold->pointCount; ++k )
-					{
-						impulse += manifold->points[k].totalNormalImpulse;
-					}
-
-					if ( manifold->pointCount == 0 || impulse <= 0.0f )
-					{
-						continue;
-					}
-
-					b3Vec3 normal = bodyIsA ? b3Neg( manifold->normal ) : manifold->normal;
-					if ( IsGhost( normal, xMin, xMax ) == false )
-					{
-						continue;
-					}
-
-					m_ghostCount += 1;
-					m_runGhostCount += 1;
-
-					b3Vec3 anchor = bodyIsA ? manifold->points[0].anchorA : manifold->points[0].anchorB;
-					m_markers[m_markerIndex] = { center + anchor, normal };
-					m_markerIndex = ( m_markerIndex + 1 ) % m_markerCapacity;
-					m_markerCount = b3MinInt( m_markerCount + 1, m_markerCapacity );
-				}
+				m_markers[m_markerIndex] = { reports[i].point, reports[i].normal };
+				m_markerIndex = ( m_markerIndex + 1 ) % m_markerCapacity;
+				m_markerCount = b3MinInt( m_markerCount + 1, m_markerCapacity );
 			}
 		}
 
@@ -2124,32 +1670,25 @@ public:
 			DrawLine( p, p + 0.5f * m_markers[i].normal, MakeColor( b3_colorRed ) );
 		}
 
-		b3Vec3 velocity = b3Body_GetLinearVelocity( m_bodyId );
-		DrawTextLine( "ghost manifolds: %d this run, %d total over %d runs", m_runGhostCount, m_ghostCount, m_runCount + 1 );
+		b3Vec3 velocity = b3Body_GetLinearVelocity( m_data.bodyId );
+		DrawTextLine( "ghost manifolds: %d this run, %d total over %d runs", m_data.runGhostCount, m_data.ghostCount,
+					  m_data.runCount + 1 );
 		DrawTextLine( "speed: %.2f m/s, vertical velocity: %.2f m/s", b3Length( velocity ), velocity.y );
 	}
 
 	bool DrawControls() override
 	{
-		const char* sceneNames[] = { "Flat", "Concave Ramp", "Cliff", "Crest", "Bumps", "T-Junction", "Shape Seam",
-									 "PEEL Internal Edges" };
-		static_assert( IM_ARRAYSIZE( sceneNames ) == e_sceneCount );
-		const char* bodyNames[] = { "Box", "Capsule", "Upright Capsule", "Sphere", "Cylinder" };
-		static_assert( IM_ARRAYSIZE( bodyNames ) == e_bodyTypeCount );
-		const char* presetNames[] = { "4 x 0.1, start -55", "4 x 0.1, start -54", "4 x 0.01, start -55",
-									  "16 x 0.01, start -54" };
-		static_assert( IM_ARRAYSIZE( presetNames ) == IM_ARRAYSIZE( m_peelPresets ) );
-
+		GhostSettings& settings = m_data.settings;
 		bool rebuild = false;
 		bool relaunch = false;
 
-		int scene = (int)m_scene;
-		if ( ImGui::Combo( "Scene", &scene, sceneNames, IM_ARRAYSIZE( sceneNames ) ) )
+		int scene = (int)settings.scene;
+		if ( ImGui::Combo( "Scene", &scene, g_ghostSceneNames, e_ghostSceneCount ) )
 		{
-			m_scene = (Scene)scene;
+			settings.scene = (GhostScene)scene;
 			rebuild = true;
 
-			if ( m_scene == e_internalEdges )
+			if ( settings.scene == e_ghostInternalEdges )
 			{
 				m_camera->SetView( 60.0f, 20.0f, 160.0f, { 0.0f, 30.0f, 0.0f } );
 			}
@@ -2159,46 +1698,46 @@ public:
 			}
 		}
 
-		if ( m_scene == e_internalEdges )
+		if ( settings.scene == e_ghostInternalEdges )
 		{
-			rebuild |= ImGui::Combo( "Preset", &m_peelPreset, presetNames, IM_ARRAYSIZE( presetNames ) );
+			rebuild |= ImGui::Combo( "Preset", &settings.peelPreset, g_ghostPeelPresetNames, GHOST_PEEL_PRESET_COUNT );
 		}
 
-		int bodyType = (int)m_bodyType;
-		if ( ImGui::Combo( "Body", &bodyType, bodyNames, IM_ARRAYSIZE( bodyNames ) ) )
+		int body = (int)settings.body;
+		if ( ImGui::Combo( "Body", &body, g_ghostBodyNames, e_ghostBodyCount ) )
 		{
-			m_bodyType = (BodyType)bodyType;
+			settings.body = (GhostBody)body;
 			relaunch = true;
 		}
 
-		rebuild |= ImGui::Checkbox( "Mirror Mesh", &m_mirror );
-		rebuild |= ImGui::SliderFloat( "Cell Size", &m_cellSize, 0.1f, 1.0f, "%.2f m" );
-		relaunch |= ImGui::SliderFloat( "Speed", &m_speed, 0.0f, 15.0f, "%.1f m/s" );
-		relaunch |= ImGui::SliderFloat( "Yaw", &m_yaw, 0.0f, 45.0f, "%.0f deg" );
-		relaunch |= ImGui::SliderFloat( "Friction", &m_friction, 0.0f, 1.0f, "%.2f" );
-		relaunch |= ImGui::Checkbox( "Fixed Rotation", &m_fixedRotation );
-		relaunch |= ImGui::Checkbox( "Speculative", &m_speculative );
+		rebuild |= ImGui::Checkbox( "Mirror Mesh", &settings.mirror );
+		rebuild |= ImGui::SliderFloat( "Cell Size", &settings.cellSize, 0.1f, 1.0f, "%.2f m" );
+		relaunch |= ImGui::SliderFloat( "Speed", &settings.speed, 0.0f, 15.0f, "%.1f m/s" );
+		relaunch |= ImGui::SliderFloat( "Yaw", &settings.yaw, 0.0f, 45.0f, "%.0f deg" );
+		relaunch |= ImGui::SliderFloat( "Friction", &settings.friction, 0.0f, 1.0f, "%.2f" );
+		relaunch |= ImGui::Checkbox( "Fixed Rotation", &settings.fixedRotation );
+		relaunch |= ImGui::Checkbox( "Speculative", &settings.speculative );
 		relaunch |= ImGui::Button( "Launch" );
 
 		if ( ImGui::Button( "Reset Counters" ) )
 		{
-			m_ghostCount = 0;
-			m_runGhostCount = 0;
-			m_runCount = 0;
+			m_data.ghostCount = 0;
+			m_data.runGhostCount = 0;
+			m_data.runCount = 0;
 			m_markerCount = 0;
 			m_markerIndex = 0;
 		}
 
 		if ( rebuild )
 		{
-			CreateGround();
+			CreateGhostGround( m_worldId, &m_data );
 			m_markerCount = 0;
 			m_markerIndex = 0;
 		}
 
 		if ( rebuild || relaunch )
 		{
-			Launch();
+			LaunchGhostBody( m_worldId, &m_data );
 		}
 
 		return true;
@@ -2215,30 +1754,7 @@ public:
 		b3Vec3 normal;
 	};
 
-	b3MeshData* m_meshes[2] = {};
-	int m_meshCount = 0;
-	std::vector<b3Vec2> m_profile;
-	b3HullData* m_cylinder;
-	b3HullData* m_peelCylinder;
-	b3BodyId m_groundId;
-	b3BodyId m_bodyId;
-	b3ShapeId m_shapeId;
-
-	Scene m_scene = e_flat;
-	BodyType m_bodyType = e_box;
-	bool m_mirror = false;
-	float m_cellSize = 0.25f;
-	float m_speed = 6.0f;
-	float m_yaw = 0.0f;
-	float m_friction = 0.0f;
-	bool m_fixedRotation = false;
-	bool m_speculative = true;
-	int m_peelPreset = 0;
-	int m_runSteps = 0;
-
-	int m_ghostCount = 0;
-	int m_runGhostCount = 0;
-	int m_runCount = 0;
+	GhostCollisionsData m_data;
 	Marker m_markers[m_markerCapacity];
 	int m_markerCount = 0;
 	int m_markerIndex = 0;

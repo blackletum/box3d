@@ -187,6 +187,7 @@ static inline b3Triangle b3GetMeshTriangle( const b3Mesh* mesh, int triangleInde
 
 bool b3GetMeshNeighborNormal( const b3Mesh* mesh, int triangleIndex, int edgeIndex, b3Vec3* normal );
 
+// Returns false if edge is isolated.
 static inline bool b3GetNeighborNormal( const b3Shape* shape, int triangleIndex, int edgeIndex, b3Vec3* normal )
 {
 	if ( shape->type == b3_meshShape )

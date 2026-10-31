@@ -5,6 +5,8 @@ set(BOX3D_SHARED_FILES
 	benchmarks.h
 	determinism.c
 	determinism.h
+	ghost_collisions.c
+	ghost_collisions.h
 	human.c
 	human.h
 	overflow_color.c
